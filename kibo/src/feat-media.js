@@ -356,6 +356,39 @@ async function dlSize(env, url) {
   } catch (_) { return 0; }
 }
 const dlCap = (title, src) => { const t = title ? hesc(String(title).slice(0, 180)) : ""; const s = src ? "\n🔗 " + hesc(String(src).slice(0, 300)) : ""; return (t + s).trim(); };
+const audioExt = m => m === "audio/mpeg" ? "mp3" : m === "audio/ogg" ? "ogg" : m === "audio/wav" ? "wav" : m === "audio/flac" ? "flac" : "m4a";
+const mimeLabel = m => m === "audio/mpeg" ? "MP3" : m === "audio/ogg" ? "OGG" : m === "audio/wav" ? "WAV" : m === "audio/flac" ? "FLAC" : m === "audio/mp4" ? "M4A" : "";
+async function dlMimeProbe(env, url) {
+  try {
+    const r = await fetch(url, { headers: { Range: "bytes=0-0" }, signal: AbortSignal.timeout(dlSizeMs(env)) });
+    if (!r.ok) return "";
+    return (r.headers.get("content-type") || "").split(";")[0].trim().toLowerCase();
+  } catch (_) { return ""; }
+}
+async function audioUpload(env, chatId, url, title, fcap) {
+  let buf = null, ct = "";
+  try {
+    const r = await fetch(url, { headers: { "user-agent": UA }, signal: AbortSignal.timeout(60000) });
+    if (!r.ok) return null;
+    ct = (r.headers.get("content-type") || "").split(";")[0].trim().toLowerCase();
+    if (ct && ct !== "application/octet-stream" && ct !== "binary/octet-stream" && !/^(audio|video)\//.test(ct)) return null;
+    buf = await r.arrayBuffer();
+  } catch (_) { return null; }
+  if (!buf || !buf.byteLength || buf.byteLength > DL_SEND_MAX) return null;
+  const safe = String(title || "audio").replace(/[\\/:*?"<>|]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 60) || "audio";
+  const form = new FormData();
+  form.append("chat_id", String(chatId));
+  form.append("title", safe);
+  if (fcap) { form.append("caption", fcap); form.append("parse_mode", "HTML"); }
+  form.append("audio", new Blob([buf], { type: ct || "audio/mp4" }), safe + "." + audioExt(ct));
+  try {
+    const r = await fetch("https://api.telegram.org/bot" + env.TG_TOKEN + "/sendAudio", { method: "POST", body: form });
+    const j = await r.json().catch(() => null);
+    if (!j || !j.ok) console.error("tg fail: sendAudio " + JSON.stringify((j && j.description) || "").slice(0, 200));
+    if (env.__probe && j && j.ok) env.__probe.push({ mid: (j.result && j.result.message_id) || null, method: "sendAudio", chat: chatId, text: String(fcap || "").slice(0, 400) });
+    return j;
+  } catch (_) { return null; }
+}
 async function dlSendFiles(env, chatId, items, title, L, src) {
   const rest = [];
   const photos = [];
@@ -372,7 +405,13 @@ async function dlSendFiles(env, chatId, items, title, L, src) {
     const body = { chat_id: chatId, reply_markup: { inline_keyboard: [[{ text: "💾 Save", callback_data: "dlsav:" + tok }]] } };
     if (isVid) { body.video = it.url; body.supports_streaming = true; if (fcap) { body.caption = fcap; body.parse_mode = "HTML"; } }
     else { body.audio = it.url; if (title) body.title = String(title).slice(0, 60); if (fcap) { body.caption = fcap; body.parse_mode = "HTML"; } }
-    const s = await tg(env, isVid ? "sendVideo" : "sendAudio", body);
+    let s = await tg(env, isVid ? "sendVideo" : "sendAudio", body);
+    if (!isVid && s && s.ok && s.result && !s.result.audio && s.result.document) {
+      try { await tg(env, "deleteMessage", { chat_id: chatId, message_id: s.result.message_id }); } catch (_) {}
+      s = await audioUpload(env, chatId, it.url, title, fcap);
+    } else if (!isVid && (!s || !s.ok)) {
+      s = await audioUpload(env, chatId, it.url, title, fcap);
+    }
     const r = s && s.ok && s.result;
     if (r) {
       count++;
@@ -431,7 +470,9 @@ async function dlMenuShow(env, chatId, L, phMid, plat, vaItems, meta, photosDone
   for (const it of vaItems) {
     const tok = rndTok();
     try { await putJSON(env, DL_PICK_PREFIX + tok, { c: chatId, item: it, t: meta.title || "", s: src || "", multi, exp: Date.now() + DL_SAV_TTL_MS }, env.DB ? { ttlMs: DL_SAV_TTL_MS } : undefined); } catch (_) {}
-    rows.push([{ text: it.kind === "video" ? (it.pos ? "🎥 " + it.pos + "/" + it.total : "🎥 " + (it.fmt || L.dlVideoBtn)) : "🎵 " + (it.fmt || "MP3"), callback_data: "dlpick:" + tok }]);
+    let lbl = it.fmt || "";
+    if (it.kind === "audio" && !lbl) lbl = mimeLabel(await dlMimeProbe(env, it.url)) || "MP3";
+    rows.push([{ text: it.kind === "video" ? (it.pos ? "🎥 " + it.pos + "/" + it.total : "🎥 " + (it.fmt || L.dlVideoBtn)) : "🎵 " + lbl, callback_data: "dlpick:" + tok }]);
   }
   for (const r of linkRows || []) rows.push(r);
   const text = dlMenuText(L, plat, meta, photosDone, vaItems);

@@ -651,6 +651,7 @@ export async function gameFanMenu(env, chatId, mid) {
     if (!(await snippetRedeliver(env, chatId, old, GAME_FAN_KEY, L))) { await notify(env, chatId, L.songReDel); return gameMenu(env, chatId, mid); }
     return editView(env, chatId, mid || old.mid, songView(old, L));
   }
+  if (old && old.d === todayDay() && old.done) return editView(env, chatId, mid || old.mid, songView(old, L));
   if (!env.LASTFM_KEY) { await notify(env, chatId, L.songOff); return gameMenu(env, chatId, mid); }
   let groups = null;
   try { groups = fanGroups(await fanTracks(env)).slice(0, FAN_MENU_MAX); } catch (_) {}
@@ -670,7 +671,7 @@ export async function gameFanStart(env, chatId, mid, ai, name) {
     if (!(await snippetRedeliver(env, chatId, old, GAME_FAN_KEY, L))) { await notify(env, chatId, L.songReDel); return gameMenu(env, chatId, mid); }
     return editView(env, chatId, mid || old.mid, songView(old, L));
   }
-  const prac = !name && !!(art && old && old.d === day && old.done);
+  const prac = !!(old && old.d === day && old.done);
   if (!env.LASTFM_KEY) { await notify(env, chatId, L.songOff); return gameMenu(env, chatId, mid); }
   let groups = null;
   try { groups = fanGroups(await fanTracks(env)); } catch (_) {}

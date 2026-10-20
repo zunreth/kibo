@@ -207,7 +207,7 @@ export const CHARM_LEG = ["cl1", "cl2", "cl3"];
 export const CHARM_EMOJI = { ce1: "\u{1F338}", ce2: "\u{1F30A}", ce3: "\u{1F525}", ce4: "\u26A1", ce5: "\u{1F319}", ce6: "\u{1F340}", cl1: "\u{1F451}", cl2: "\u{1F984}", cl3: "\u{1F4AB}" };
 export const GACHA_ODDS = { l: 0.03, e: 0.12, r: 0.30 };
 export const GACHA_COST = 25, GACHA_COST5 = 100, GACHA_PITY = 10, GACHA_JACKPOT = 100, GACHA_REFUND = 5;
-export const BOT_VER = "2.62.2";
+export const BOT_VER = "2.62.3";
 export const WIZ_KEY = "model_wizard";
 export const PRESET_KEY = "presets";
 export const PRESET_MAX = 15;
