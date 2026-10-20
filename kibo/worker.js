@@ -1087,7 +1087,7 @@ async function handleCallback(env, cb) {
     if (arg.startsWith("sg:")) return gameSongPick(env, chatId, mid, parseInt(arg.slice(3), 10) || 0);
     if (arg === "sfan") return gameFanMenu(env, chatId, mid);
     if (arg.startsWith("sfa:")) { const n = parseInt(arg.slice(4), 10); return gameFanStart(env, chatId, mid, isNaN(n) ? -1 : n); }
-    if (arg === "sfap") return gameFanStart(env, chatId, mid, -1);
+    if (arg === "sfap") return gameFanMenu(env, chatId, mid, 1);
     if (arg === "sfask") return gameFanAskOpen(env, chatId, mid);
     if (arg === "sfax") { const a = await askGet(env); await askClear(env); return gameFanStart(env, chatId, mid, -1, a && a.k === "sfax" ? a.d : null); }
     if (arg === "sfcx") return gameFanAskCancel(env, chatId, mid);

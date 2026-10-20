@@ -365,7 +365,7 @@ async function dlMimeProbe(env, url) {
     return (r.headers.get("content-type") || "").split(";")[0].trim().toLowerCase();
   } catch (_) { return ""; }
 }
-async function audioUpload(env, chatId, url, title, fcap) {
+async function audioUpload(env, chatId, url, title, fcap, tok) {
   let buf = null, ct = "";
   try {
     const r = await fetch(url, { headers: { "user-agent": UA }, signal: AbortSignal.timeout(60000) });
@@ -380,6 +380,7 @@ async function audioUpload(env, chatId, url, title, fcap) {
   form.append("chat_id", String(chatId));
   form.append("title", safe);
   if (fcap) { form.append("caption", fcap); form.append("parse_mode", "HTML"); }
+  form.append("reply_markup", JSON.stringify({ inline_keyboard: [[{ text: "💾 Save", callback_data: "dlsav:" + tok }]] }));
   form.append("audio", new Blob([buf], { type: ct || "audio/mp4" }), safe + "." + audioExt(ct));
   try {
     const r = await fetch("https://api.telegram.org/bot" + env.TG_TOKEN + "/sendAudio", { method: "POST", body: form });
@@ -408,9 +409,9 @@ async function dlSendFiles(env, chatId, items, title, L, src) {
     let s = await tg(env, isVid ? "sendVideo" : "sendAudio", body);
     if (!isVid && s && s.ok && s.result && !s.result.audio && s.result.document) {
       try { await tg(env, "deleteMessage", { chat_id: chatId, message_id: s.result.message_id }); } catch (_) {}
-      s = await audioUpload(env, chatId, it.url, title, fcap);
+      s = await audioUpload(env, chatId, it.url, title, fcap, tok);
     } else if (!isVid && (!s || !s.ok)) {
-      s = await audioUpload(env, chatId, it.url, title, fcap);
+      s = await audioUpload(env, chatId, it.url, title, fcap, tok);
     }
     const r = s && s.ok && s.result;
     if (r) {

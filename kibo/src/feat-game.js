@@ -643,7 +643,7 @@ function fanGroups(pool) {
   return [...g.values()].filter(e => e.tr.length >= FAN_MIN_SONGS).sort((x, y) => y.pc - x.pc);
 }
 
-export async function gameFanMenu(env, chatId, mid) {
+export async function gameFanMenu(env, chatId, mid, sel) {
   const L = await uiLang(env);
   const old = await getJSON(env, GAME_FAN_KEY + chatId, null);
   if (old && old.d === todayDay() && !old.done) {
@@ -651,7 +651,7 @@ export async function gameFanMenu(env, chatId, mid) {
     if (!(await snippetRedeliver(env, chatId, old, GAME_FAN_KEY, L))) { await notify(env, chatId, L.songReDel); return gameMenu(env, chatId, mid); }
     return editView(env, chatId, mid || old.mid, songView(old, L));
   }
-  if (old && old.d === todayDay() && old.done) return editView(env, chatId, mid || old.mid, songView(old, L));
+  if (!sel && old && old.d === todayDay() && old.done) return editView(env, chatId, mid || old.mid, songView(old, L));
   if (!env.LASTFM_KEY) { await notify(env, chatId, L.songOff); return gameMenu(env, chatId, mid); }
   let groups = null;
   try { groups = fanGroups(await fanTracks(env)).slice(0, FAN_MENU_MAX); } catch (_) {}
