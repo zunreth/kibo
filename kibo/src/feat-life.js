@@ -1,0 +1,729 @@
+import {
+  WIB,
+  FOCUS_KEY, SLEEP_GN_KEY, SLEEP_LOG_KEY, HABITS_KEY, EXP_KEY, CAPSULE_KEY,
+  SLEEP_WEEK_KEY, EXP_MONTH_KEY,
+  COUNTDOWN_KEY, COUNTDOWN_MAX, COUNTDOWN_NAME_CAP,
+  RESURFACE_KEY, RESURFACE_MIN_AGE_DAYS, RESURFACE_EVERY,
+  AMA_KEY, AMA_GAP_MS, AMA_Q_CAP,
+  ALARM_KEY, ALARM_DEF_H, REACTD_KEY, REACT_PROB, REACT_DAILY_CAP,
+  CHAR_ACTIVE_KEY, REL_PREFIX,
+  FOCUS_MIN, FOCUS_MAX, FOCUS_PTS, FOCUS_GRACE,
+  SLEEP_CAP_H, SLEEP_LOG_MAX, HABIT_MAX, HABIT_PTS, EXP_MAX, EXP_NOTE_CAP,
+  HABIT_WEEK_PTS, HABIT_MS, HABIT_WK_MS, LIFE_NOTE_KEY, LIFE_NOTE_MAX,
+  HABIT_PLAN_KEY, HABIT_PLAN_HABITS_MAX,
+  CAPSULE_PEND_MAX, CAPSULE_ARCH_MAX, CAPSULE_TEXT_CAP, CAPSULE_MIN_GAP,
+} from './consts.js';
+import { getJSON, putJSON, reply, notify, esc, mdTg, tg, delCmd } from './base.js';
+import { uiLang, fmtWIB, UI_SEP } from './ui.js';
+import { addPts, parseRemind, remindMsg } from './feat-remind.js';
+import { getActiveCard } from './feat-chars.js';
+import { chatStream } from './feat-personal.js';
+import { stripThink } from './ai.js';
+
+const nowS = () => Math.floor(Date.now() / 1000);
+const dayWIB = sec => { const d = new Date(((sec || nowS()) + WIB) * 1000); const p = n => String(n).padStart(2, "0"); return d.getUTCFullYear() + "-" + p(d.getUTCMonth() + 1) + "-" + p(d.getUTCDate()); };
+const monWIB = sec => dayWIB(sec).slice(0, 7);
+const dowWIB = sec => new Date(((sec || nowS()) + WIB) * 1000).getUTCDay();
+const wkOf = sec => { const t = (sec || nowS()) + WIB; const d = new Date(t * 1000); const mon = new Date((t - ((d.getUTCDay() + 6) % 7) * 86400) * 1000); const p = n => String(n).padStart(2, "0"); return mon.getUTCFullYear() + "-" + p(mon.getUTCMonth() + 1) + "-" + p(mon.getUTCDate()); };
+const rp = n => "Rp" + String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+
+export async function lifeMsg(env, event, hint) {
+  try { return await remindMsg(env, 0, event, 0, "life:" + hint); } catch (_) { return ""; }
+}
+const reactTail = (env, chatId, ai) => ai ? reply(env, chatId, "\u{1F4AC} " + mdTg(esc(ai))) : Promise.resolve();
+
+export async function lifeNote(env, text) {
+  try {
+    const arr = (await getJSON(env, LIFE_NOTE_KEY, [])).filter(n => n && n.t);
+    arr.push({ t: String(text).slice(0, 200), ts: nowS() });
+    while (arr.length > LIFE_NOTE_MAX) arr.shift();
+    await putJSON(env, LIFE_NOTE_KEY, arr);
+  } catch (_) {}
+}
+
+function parseDur(raw) {
+  const m = String(raw || "").match(/^(\d{1,4})\s*(m|menit|min|j|jam|h)?$/);
+  if (!m) return null;
+  const n = parseInt(m[1], 10);
+  return /^(j|jam|h)/.test(m[2] || "") ? n * 60 : n;
+}
+export async function handleFocus(env, msg, chatId) {
+  const L = await uiLang(env);
+  const raw = (msg.text || "").replace(/^\/\S+\s*/, "").trim().toLowerCase();
+  const sec = nowS();
+  const st = await getJSON(env, FOCUS_KEY, null);
+  const busy = !!(st && !st.settled && sec < st.start + st.dur);
+  if (raw === "done" || raw === "stop") {
+    if (!st || st.settled) return reply(env, chatId, L.fGone);
+    const end = st.start + st.dur;
+    await putJSON(env, FOCUS_KEY, Object.assign({}, st, { settled: true }));
+    if (raw === "done" && sec >= end && sec <= end + FOCUS_GRACE) {
+      await addPts(env, FOCUS_PTS);
+      const wallet = ((await getJSON(env, "quest", {})).points) || 0;
+      await reply(env, chatId, L.fClaimOk(FOCUS_PTS, wallet));
+      return reactTail(env, chatId, await lifeMsg(env, "the user just completed a " + Math.round(st.dur / 60) + "-minute focus session (+" + FOCUS_PTS + " points)", "the user finished a focus session: praise them briefly and warmly, one line."));
+    }
+    if (raw === "stop" || sec < end) {
+      await reply(env, chatId, L.fAbort);
+      return reactTail(env, chatId, await lifeMsg(env, "the user aborted their " + Math.round(st.dur / 60) + "-minute focus session early", "the user gave up on the focus session: mild loving disappointment (no hard scolding), one line."));
+    }
+    return reply(env, chatId, L.fKabur);
+  }
+  if (!raw) {
+    if (busy) return reply(env, chatId, L.fHead + "\n" + L.fRun(Math.round(st.dur / 60), st.start + st.dur - sec) + "\n" + L.fHow);
+    return reply(env, chatId, L.fHead + "\n" + L.fIdle + "\n" + L.fHow);
+  }
+  const n = parseDur(raw);
+  if (n === null || n < FOCUS_MIN || n > FOCUS_MAX) return reply(env, chatId, L.fRange(FOCUS_MIN, FOCUS_MAX));
+  if (busy) return reply(env, chatId, L.fRun(Math.round(st.dur / 60), st.start + st.dur - sec) + "\n" + L.fHow);
+  await putJSON(env, FOCUS_KEY, { start: sec, dur: n * 60, settled: false });
+  await reply(env, chatId, L.fSet(n));
+}
+
+export async function focusCron(env, nowSec) {
+  const st = await getJSON(env, FOCUS_KEY, null);
+  if (!st || st.settled || nowSec <= st.start + st.dur + FOCUS_GRACE) return;
+  await putJSON(env, FOCUS_KEY, Object.assign({}, st, { settled: true }));
+  const owner = parseInt((await env.KV.get("owner_chat")) || "0", 10);
+  if (!owner) return;
+  const L = await uiLang(env);
+  await reply(env, owner, L.fKabur);
+  return reactTail(env, owner, await lifeMsg(env, "the user let their focus session expire without claiming it", "the focus session expired unclaimed: gentle tease, no guilt-trip, one line."));
+}
+
+export async function focusIntercept(env, chatId, cmd, text, mid) {
+  if (cmd === "/focus") return false;
+  const sec = nowS();
+  const st = await getJSON(env, FOCUS_KEY, null);
+  if (!st || st.settled || sec >= st.start + st.dur) return false;
+  await putJSON(env, FOCUS_KEY, Object.assign({}, st, { settled: true, voided: sec }));
+  const L = await uiLang(env);
+  if (cmd && cmd.startsWith("/") && mid) { try { await delCmd(env, chatId, mid); } catch (_) {} }
+  const what = cmd ? "running the command " + cmd : (text ? 'chatting with you: "' + String(text).slice(0, 80) + '"' : "sending media");
+  await reply(env, chatId, L.fCaught(Math.max(1, Math.ceil((st.start + st.dur - sec) / 60))));
+  await reactTail(env, chatId, await lifeMsg(env, "the user got caught " + what + " just " + Math.max(1, Math.round((sec - st.start) / 60)) + " minutes into their " + Math.round(st.dur / 60) + "-minute focus session — the session is voided", "the user got caught cheating on their focus session by using the bot: call it out playfully like they just failed focus, one line."));
+  return true;
+}
+
+export async function handleSleep(env, msg, chatId) {
+  const L = await uiLang(env);
+  const raw = (msg.text || "").replace(/^\/\S+\s*/, "").trim().toLowerCase();
+  const sec = nowS();
+  if (raw === "gn") {
+    await putJSON(env, SLEEP_GN_KEY, sec);
+    return notify(env, chatId, L.sGnSet(fmtWIB(sec, L)));
+  }
+  if (raw === "gm") {
+    const gn = await getJSON(env, SLEEP_GN_KEY, null);
+    if (!gn) return reply(env, chatId, L.sGmNo);
+    const h = Math.min(SLEEP_CAP_H, Math.round(((sec - gn) / 36) / 10) / 10);
+    const log = (await getJSON(env, SLEEP_LOG_KEY, [])).filter(x => x && typeof x.gm === "number");
+    log.unshift({ gn, gm: sec, h });
+    while (log.length > SLEEP_LOG_MAX) log.pop();
+    await putJSON(env, SLEEP_LOG_KEY, log);
+    await env.KV.delete(SLEEP_GN_KEY);
+    await reply(env, chatId, L.sGmOk(h));
+    return reactTail(env, chatId, await lifeMsg(env, "the user just woke up; last night " + h + " hours (now in the sleep log)", h < 6 ? "the user slept under 6 hours: gently worry / tease about their sleep, one line." : "the user slept enough: greet them warmly, one line."));
+  }
+  const log = (await getJSON(env, SLEEP_LOG_KEY, [])).filter(x => x && typeof x.gm === "number").slice(0, 7);
+  const gn = await getJSON(env, SLEEP_GN_KEY, null);
+  const avg = log.length ? Math.round(log.reduce((a, b) => a + (b.h || 0), 0) / log.length * 10) / 10 : 0;
+  const rows = log.map(e => "\u2022 " + fmtWIB(e.gm, L).replace(/ \d{2}:\d{2} WIB$/, "") + ": " + e.h + "h").join("\n");
+  return reply(env, chatId, L.sHead + "\n" + (gn ? L.sOpen(fmtWIB(gn, L)) + "\n" : "") + (rows ? rows + "\n" + L.sAvg(avg, log.length) : L.sEmpty) + "\n" + L.sHow);
+}
+
+export async function habitsResetLazy(env, arr, today, yesterday, wkNow) {
+  let ch = false;
+  const wk = wkNow || wkOf();
+  for (const h of arr) {
+    if (h.tgt) {
+      if (h.wk !== wk) { if ((h.wkc || 0) < h.tgt && h.streak > 0) h.streak = 0; h.wk = wk; h.wkc = 0; ch = true; }
+    } else if (h.last_done && h.last_done !== today && h.last_done < yesterday && h.streak > 0) { h.streak = 0; ch = true; }
+  }
+  if (ch) await putJSON(env, HABITS_KEY, arr);
+  return ch;
+}
+export async function habitView(env) {
+  const L = await uiLang(env);
+  const sec = nowS();
+  const today = dayWIB(sec), yesterday = dayWIB(sec - 86400);
+  const arr = (await getJSON(env, HABITS_KEY, [])).filter(h => h && h.name);
+  await habitsResetLazy(env, arr, today, yesterday);
+  const plan = await getJSON(env, HABIT_PLAN_KEY, null);
+  try { if (plan) await planNudgeMaybe(env, plan); } catch (_) {}
+  const rows = arr.map((h, i) => (i + 1) + ". " + esc(h.name) + " " + (h.last_done === today ? "\u2705" : "\u2b1c") + (h.tgt ? " " + L.hWkProg(Math.min(h.wkc || 0, h.tgt), h.tgt) : "") + " \u{1F525}" + (h.streak || 0) + (h.tgt ? "w" : "")).join("\n");
+  const kb = { inline_keyboard: arr.map(h => [{ text: (h.last_done === today ? "\u2705 " : "") + h.name.slice(0, 20), callback_data: "habit:" + h.id }]).concat([[{ text: L.home, callback_data: "menu" }]]) };
+  return { text: L.hHead + UI_SEP + (rows || L.hEmpty) + "\n" + L.hHow, markup: kb };
+}
+export async function handleHabit(env, msg, chatId) {
+  const L = await uiLang(env);
+  const raw = (msg.text || "").replace(/^\/\S+\s*/, "").trim();
+  if (!raw) { const v = await habitView(env); return tg(env, "sendMessage", { chat_id: chatId, text: v.text, parse_mode: "HTML", reply_markup: v.markup }); }
+  const sub = raw.split(/\s+/)[0].toLowerCase();
+  if (sub === "plan") return handleHabitPlan(env, msg, chatId);
+  if (sub === "add") {
+    let rest = raw.slice(raw.indexOf(" ") + 1).trim();
+    let tgt = 0;
+    const mt = rest.match(/\s(\d)\s*$/);
+    if (mt) { tgt = parseInt(mt[1], 10); rest = rest.slice(0, mt.index).trim(); }
+    const name = rest.slice(0, 30);
+    if (/^\d$/.test(rest)) return reply(env, chatId, L.hAddUsage);
+    if (!name || raw.toLowerCase().trim() === "add") return reply(env, chatId, L.hAddUsage);
+    if (tgt && (tgt < 1 || tgt > 7)) return reply(env, chatId, L.hTgtRange);
+    const arr = (await getJSON(env, HABITS_KEY, [])).filter(h => h && h.name);
+    if (arr.length >= HABIT_MAX) return reply(env, chatId, L.hFull(HABIT_MAX));
+    arr.push(Object.assign({ id: (arr.reduce((m, h) => Math.max(m, h.id || 0), 0) + 1), name, streak: 0, last_done: "" }, tgt ? { tgt, wk: wkOf(nowS()), wkc: 0 } : {}));
+    await putJSON(env, HABITS_KEY, arr);
+    return notify(env, chatId, tgt ? L.hAddOkW(esc(name), tgt) : L.hAddOk(esc(name)));
+  }
+  if (sub === "del") {
+    const toks = raw.slice(3).trim().split(/[\s,]+/).filter(Boolean);
+    if (!toks.length) return reply(env, chatId, L.hDelUsage);
+    const arr = (await getJSON(env, HABITS_KEY, [])).filter(h => h && h.name);
+    const want = new Set();
+    let tried = 0, miss = 0;
+    for (const tk of toks) {
+      const m = tk.match(/^(\d{1,2})(?:-(\d{1,2}))?$/);
+      if (!m) continue;
+      tried++;
+      const a = parseInt(m[1], 10), b = m[2] ? parseInt(m[2], 10) : a;
+      let hit = false;
+      for (let i = Math.min(a, b); i <= Math.max(a, b); i++) if (i >= 1 && i <= arr.length) { want.add(i); hit = true; }
+      if (!hit) miss++;
+    }
+    if (!want.size) return reply(env, chatId, tried ? L.hGone : L.hDelUsage);
+    const gone = [], goneIds = [];
+    const keep = arr.filter((h, i) => {
+      if (!want.has(i + 1)) return true;
+      gone.push(esc(h.name)); goneIds.push(h.id);
+      return false;
+    });
+    await putJSON(env, HABITS_KEY, keep);
+    const plan = await getJSON(env, HABIT_PLAN_KEY, null);
+    if (plan) {
+      let ch = false;
+      for (const hp of plan.habits) if (hp.hid > 0 && goneIds.includes(hp.hid)) { hp.hid = -1; ch = true; }
+      if (ch) await putJSON(env, HABIT_PLAN_KEY, plan);
+    }
+    return notify(env, chatId, gone.length === 1 ? L.hDelOk(gone[0]) : L.hDelOkN(gone.length, gone.join(", "), miss));
+  }
+  return reply(env, chatId, L.hHow);
+}
+export async function handleHabitCb(env, chatId, mid, arg) {
+  const L = await uiLang(env);
+  const sec = nowS();
+  const today = dayWIB(sec), yesterday = dayWIB(sec - 86400);
+  const arr = (await getJSON(env, HABITS_KEY, [])).filter(h => h && h.name);
+  await habitsResetLazy(env, arr, today, yesterday, wkOf(sec));
+  const h = arr.find(x => String(x.id) === String(arg));
+  if (!h) return L.hGone;
+  if (h.last_done === today) return L.hAlr;
+  let bonus = 0, wkHit = false;
+  if (h.tgt) {
+    const before = h.wkc || 0;
+    h.wkc = Math.min(before + 1, h.tgt);
+    wkHit = before < h.tgt && h.wkc === h.tgt;
+    if (wkHit) { h.streak = (h.streak || 0) + 1; bonus = HABIT_WEEK_PTS; }
+  } else {
+    h.streak = h.last_done === yesterday ? (h.streak || 0) + 1 : 1;
+  }
+  h.last_done = today;
+  await putJSON(env, HABITS_KEY, arr);
+  await addPts(env, HABIT_PTS + bonus);
+  if (wkHit) {
+    await lifeNote(env, "hit this week's target for the habit '" + h.name + "' (" + h.wkc + "/" + h.tgt + " this week, " + h.streak + "-week streak)");
+    if (HABIT_WK_MS.includes(h.streak)) await lifeNote(env, "the habit '" + h.name + "' reached a " + h.streak + "-week streak");
+    await reactTail(env, chatId, await lifeMsg(env, "the user just hit this week's target for their habit '" + h.name + "' (" + h.wkc + "/" + h.tgt + ", week streak " + h.streak + ")", "the user completed their weekly habit target: big warm hype, one line."));
+  } else {
+    if (HABIT_MS.includes(h.streak)) await lifeNote(env, "the habit '" + h.name + "' reached a " + h.streak + "-day streak");
+    await reactTail(env, chatId, await lifeMsg(env, "the user checked in on their habit '" + h.name + "' (streak now " + h.streak + " day" + (h.streak === 1 ? "" : "s") + ")", "the user did their habit check-in: short hype, the streak is alive, one line."));
+  }
+  if (mid) await editHabitView(env, chatId, mid);
+  return wkHit ? L.hDonePopW(h.streak || 0, h.wkc, h.tgt, HABIT_PTS, bonus) : L.hDonePop(h.streak || 0, HABIT_PTS);
+}
+async function editHabitView(env, chatId, mid) {
+  try { const v = await habitView(env); await tg(env, "editMessageText", { chat_id: chatId, message_id: mid, text: v.text, parse_mode: "HTML", reply_markup: v.markup }); } catch (_) {}
+}
+
+export function parseAmt(tok) {
+  const m = String(tok || "").match(/^(\d+(?:[.,]\d+)?)\s*(k|rb)?$/i);
+  if (!m) return null;
+  const n = parseFloat(m[1].replace(",", ".")) * (m[2] ? 1000 : 1);
+  if (!isFinite(n) || n <= 0 || n > 1e12) return null;
+  return Math.floor(n);
+}
+function mtdOf(arr, mon) {
+  const rows = arr.filter(e => monWIB(Math.floor(e.ts / 1000)) === mon);
+  const total = rows.reduce((a, b) => a + b.amt, 0);
+  const big = rows.reduce((a, b) => (b.amt > ((a && a.amt) || 0) ? b : a), null);
+  return { rows, total, big };
+}
+const bigTxt = b => (b ? rp(b.amt) + " \u2014 " + esc(b.note || "-") : "-");
+export async function handleBeli(env, msg, chatId) {
+  const L = await uiLang(env);
+  const raw = (msg.text || "").replace(/^\/\S+\s*/, "").trim();
+  const arr = (await getJSON(env, EXP_KEY, [])).filter(e => e && typeof e.amt === "number");
+  const mon = monWIB(nowS());
+  if (!raw || raw.toLowerCase() === "recap") {
+    const { rows, total, big } = mtdOf(arr, mon);
+    if (raw.toLowerCase() === "recap") {
+      const top = rows.slice().sort((a, b) => b.amt - a.amt).slice(0, 5).map(e => "\u2022 " + rp(e.amt) + " \u2014 " + esc(e.note || "-")).join("\n");
+      return reply(env, chatId, L.bHead + "\n" + L.bMtd(rp(total), rows.length, bigTxt(big)) + (top ? "\n" + top : ""));
+    }
+    return reply(env, chatId, L.bHead + "\n" + L.bMtd(rp(total), rows.length, bigTxt(big)) + "\n" + L.bUsage);
+  }
+  const sp = raw.indexOf(" ");
+  const amt = parseAmt(sp < 0 ? raw : raw.slice(0, sp));
+  const note = (sp < 0 ? "" : raw.slice(sp + 1)).trim().slice(0, EXP_NOTE_CAP);
+  if (amt === null) return reply(env, chatId, L.bBad);
+  arr.unshift({ ts: Date.now(), amt, note });
+  while (arr.length > EXP_MAX) arr.pop();
+  await putJSON(env, EXP_KEY, arr);
+  const { total } = mtdOf(arr, mon);
+  return reply(env, chatId, L.bOk(rp(amt), note ? esc(note) : "-", rp(total)));
+}
+
+export async function handleCapsule(env, msg, chatId) {
+  const L = await uiLang(env);
+  const raw = (msg.text || "").replace(/^\/\S+\s*/, "").trim();
+  const sec = nowS();
+  const arr = (await getJSON(env, CAPSULE_KEY, [])).filter(c => c && c.text);
+  if (!raw) {
+    const pend = arr.filter(c => !c.fired);
+    const rows = pend.map((c, i) => (i + 1) + ". " + fmtWIB(c.due, L) + " \u2014 " + esc(c.text.slice(0, 40)) + (c.text.length > 40 ? "\u2026" : "")).join("\n");
+    return reply(env, chatId, L.cHead + "\n" + (rows || L.cEmpty) + "\n" + L.cUsage);
+  }
+  if (/^del\s+\d+$/i.test(raw)) {
+    const n = parseInt(raw.split(/\s+/)[1], 10);
+    const pend = arr.filter(c => !c.fired);
+    if (!pend[n - 1]) return reply(env, chatId, L.cGone);
+    pend[n - 1].fired = -1;
+    while (arr.length > CAPSULE_PEND_MAX + CAPSULE_ARCH_MAX) arr.pop();
+    await putJSON(env, CAPSULE_KEY, arr);
+    return notify(env, chatId, L.cDelOk);
+  }
+  const toks = raw.split(/\s+/);
+  let due = null, mi = 0;
+  for (let len = Math.min(5, toks.length - 1); len >= 1; len--) {
+    const t = parseRemind(toks.slice(0, len).join(" "), sec);
+    if (t) { due = t; mi = len; break; }
+  }
+  if (!due) return reply(env, chatId, L.cBad);
+  const text = toks.slice(mi).join(" ").slice(0, CAPSULE_TEXT_CAP);
+  if (!text) return reply(env, chatId, L.cShort);
+  if (due < sec + CAPSULE_MIN_GAP) return reply(env, chatId, L.cSoon);
+  if (arr.filter(c => !c.fired).length >= CAPSULE_PEND_MAX) return reply(env, chatId, L.cFull(CAPSULE_PEND_MAX));
+  arr.unshift({ created: sec, due, text, fired: 0 });
+  while (arr.length > CAPSULE_PEND_MAX + CAPSULE_ARCH_MAX) arr.pop();
+  await putJSON(env, CAPSULE_KEY, arr);
+  return reply(env, chatId, L.cOk(fmtWIB(due, L)));
+}
+
+export async function capsuleCron(env, nowSec) {
+  const arr = (await getJSON(env, CAPSULE_KEY, [])).filter(c => c && c.text);
+  let changed = false;
+  for (const c of arr) {
+    if (c.fired || c.due > nowSec) continue;
+    c.fired = nowSec; changed = true;
+    const L = await uiLang(env);
+    const card = await getActiveCard(env).catch(() => null);
+    let intro = "";
+    if (card) intro = await lifeMsg(env, "a time capsule the user wrote on " + fmtWIB(c.created, L) + " just opened. The letter says: \"" + c.text.slice(0, 300) + "\"", "deliver this letter: quote its opening warmly in-character, then hand it over, one or two lines.");
+    const owner = parseInt((await env.KV.get("owner_chat")) || "0", 10);
+    if (owner) await reply(env, owner, L.cCard(fmtWIB(c.created, L), esc(c.text)) + (intro ? "\n\n\u{1F4AC} " + mdTg(esc(intro)) : ""));
+  }
+  if (changed) {
+    while (arr.length > CAPSULE_PEND_MAX + CAPSULE_ARCH_MAX) arr.pop();
+    await putJSON(env, CAPSULE_KEY, arr);
+  }
+}
+
+export async function lifeCron(env, nowSec) {
+  await focusCron(env, nowSec).catch(() => {});
+  await capsuleCron(env, nowSec).catch(() => {});
+  await countdownCron(env, nowSec).catch(() => {});
+  await resurfaceCron(env, nowSec).catch(() => {});
+  await alarmCron(env, nowSec).catch(() => {});
+}
+
+const p2 = n => String(n).padStart(2, "0");
+export async function handleAlarm(env, msg, chatId) {
+  const L = await uiLang(env);
+  const raw = (msg.text || "").replace(/^\/\S+\s*/, "").trim().toLowerCase();
+  const key = ALARM_KEY + chatId;
+  const cur = (await getJSON(env, key, null)) || { on: 0, h: ALARM_DEF_H, m: 0 };
+  if (!raw) return reply(env, chatId, L.alarmView(cur.on ? "ON \u2705" : "OFF \u274c", p2(cur.h) + ":" + p2(cur.m)));
+  const a = raw.split(/\s+/);
+  if (a[0] === "on") {
+    let h = ALARM_DEF_H, m = 0;
+    if (a[1]) {
+      const mm = /^(\d{1,2})[:.](\d{2})$/.exec(a[1]);
+      if (!mm || +mm[1] > 23 || +mm[2] > 59) return reply(env, chatId, L.alarmBad);
+      h = +mm[1]; m = +mm[2];
+    }
+    await putJSON(env, key, { on: 1, h, m, last: cur.last });
+    return reply(env, chatId, L.alarmOn(p2(h) + ":" + p2(m)));
+  }
+  if (a[0] === "off") {
+    await putJSON(env, key, { on: 0, h: cur.h, m: cur.m, last: cur.last });
+    return reply(env, chatId, L.alarmOff);
+  }
+  return reply(env, chatId, L.alarmUsage);
+}
+
+export async function alarmCron(env, nowSec) {
+  const sec = nowSec || nowS();
+  const owner = parseInt((await env.KV.get("owner_chat")) || "0", 10);
+  if (!owner) return;
+  const cfg = await getJSON(env, ALARM_KEY + owner, null);
+  if (!cfg || !cfg.on) return;
+  const d = new Date((sec + WIB) * 1000);
+  if (d.getUTCHours() !== cfg.h || d.getUTCMinutes() >= 5) return;
+  const day = dayWIB(sec);
+  if (cfg.last === day) return;
+  await putJSON(env, ALARM_KEY + owner, { on: cfg.on, h: cfg.h, m: cfg.m, last: day });
+  const ai = await lifeMsg(env, "MORNING GREETING: it just turned " + p2(cfg.h) + ":" + p2(cfg.m) + " in the user's timezone (WIB)", "say a short warm good morning in-character; one or two lines max, no list, no agenda");
+  if (ai) await reply(env, owner, "\u2615 " + mdTg(esc(ai)));
+}
+
+export function reactPick(text, aff) {
+  const t = String(text || "").toLowerCase();
+  if (/(wkwk|haha|hehe|lmao|\u{1F602}|\u{1F923})/u.test(t)) return "\u{1F601}";
+  if (/(mantap|gacor|keren|jago|pintar|\bnice\b|\bgg\b|\u{1F525})/u.test(t)) return "\u{1F525}";
+  if (/(sayang|kangen|rindu|cinta|love|miss you)/.test(t)) return "\u2764";
+  if (/(sedih|nangis|galau|nyesek|\u{1F622})/u.test(t)) return "\u{1F622}";
+  return aff >= 60 ? "\u2764" : "\u{1F44D}";
+}
+
+export async function fReact(env, chatId, mid, text) {
+  if (fnv1a(String(chatId) + "|" + String(mid)) % REACT_PROB !== 0) return;
+  const day = dayWIB(nowS());
+  const st = (await getJSON(env, REACTD_KEY, null)) || { d: {} };
+  const used = ((st.d[day] || {})[String(chatId)]) || 0;
+  if (used >= REACT_DAILY_CAP) return;
+  let aff = 0;
+  try {
+    const ca = await getJSON(env, CHAR_ACTIVE_KEY, null);
+    if (ca) {
+      const rel = await getJSON(env, REL_PREFIX + ca, null);
+      if (rel && typeof rel.aff === "number") aff = rel.aff;
+    }
+  } catch (_) {}
+  const emoji = reactPick(text, aff);
+  const j = await tg(env, "setMessageReaction", { chat_id: chatId, message_id: mid, reaction: [{ type: "emoji", emoji }] });
+  if (!j || j.ok === false) return;
+  const nd = { d: {} };
+  const yd = dayWIB(nowS() - 86400);
+  for (const k of Object.keys(st.d)) if (k >= yd) nd.d[k] = st.d[k];
+  nd.d[day] = Object.assign({}, st.d[day] || {});
+  nd.d[day][String(chatId)] = used + 1;
+  await putJSON(env, REACTD_KEY, nd);
+}
+
+const cdDayMs = day => { const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(day || "")); return m ? Date.UTC(+m[1], +m[2] - 1, +m[3]) : null; };
+
+export async function handleCountdown(env, msg, chatId) {
+  const L = await uiLang(env);
+  const raw = (msg.text || "").replace(/^\/\S+\s*/, "").trim();
+  const sec = nowS();
+  const arr = (await getJSON(env, COUNTDOWN_KEY, [])).filter(c => c && c.name && c.day);
+  if (!raw) {
+    const todayMs = cdDayMs(dayWIB(sec));
+    const rows = arr.slice().sort((a, b) => (cdDayMs(a.day) || 0) - (cdDayMs(b.day) || 0)).map(c => {
+      const left = Math.round(((cdDayMs(c.day) || 0) - todayMs) / 86400000);
+      return "#" + c.id + " <b>" + esc(c.name) + "</b> \u2014 " + (left > 0 ? L.cdDays(left) : left === 0 ? L.cdToday : L.cdPast);
+    }).join("\n");
+    return reply(env, chatId, L.cdTitle + UI_SEP + (rows || L.cdEmpty) + "\n" + L.cdUsage);
+  }
+  if (/^del\s+\d+$/i.test(raw)) {
+    const n = parseInt(raw.split(/\s+/)[1], 10);
+    const i = arr.findIndex(c => c.id === n);
+    if (i < 0) return reply(env, chatId, L.cdGone);
+    arr.splice(i, 1);
+    await putJSON(env, COUNTDOWN_KEY, arr);
+    return notify(env, chatId, L.cdDelOk);
+  }
+  const m = /^(.*?)(\d{4}-\d{2}-\d{2})\s*$/.exec(raw);
+  const name = (m ? m[1] : "").trim().replace(/^[\s\-\u2014:]+/, "");
+  const day = m ? m[2] : "";
+  if (!name || !cdDayMs(day)) return reply(env, chatId, L.cdBad);
+
+if (arr.length >= COUNTDOWN_MAX) return reply(env, chatId, L.cdFull(COUNTDOWN_MAX));
+  const id = (arr.reduce((a, c) => Math.max(a, c.id || 0), 0) || 0) + 1;
+  arr.push({ id, name: name.slice(0, COUNTDOWN_NAME_CAP), day, created: sec, fired: 0 });
+  await putJSON(env, COUNTDOWN_KEY, arr);
+  return reply(env, chatId, L.cdAdded(esc(name.slice(0, COUNTDOWN_NAME_CAP)), day));
+}
+
+export async function countdownCron(env, nowSec) {
+  const today = dayWIB(nowSec);
+  const arr = (await getJSON(env, COUNTDOWN_KEY, [])).filter(c => c && c.name && c.day);
+  let changed = false;
+  for (const c of arr) {
+    if (c.fired || c.day !== today) continue;
+    c.fired = nowSec; changed = true;
+    const L = await uiLang(env);
+    const owner = parseInt((await env.KV.get("owner_chat")) || "0", 10);
+    if (owner) await reply(env, owner, L.cdFire(esc(c.name)));
+  }
+  if (changed) await putJSON(env, COUNTDOWN_KEY, arr);
+}
+
+const fnv1a = s => { let h = 2166136261; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); } return h >>> 0; };
+export { fnv1a };
+
+export async function resurfaceCron(env, nowSec) {
+  const sec = nowSec || nowS();
+  const d = new Date((sec + WIB) * 1000);
+  if (d.getUTCHours() !== 21 || d.getUTCMinutes() >= 5) return;
+  const day = dayWIB(sec);
+  if (fnv1a(day) % RESURFACE_EVERY !== 0) return;
+  const flag = await getJSON(env, RESURFACE_KEY, null);
+  if (flag === day) return;
+  const all = (await getJSON(env, "journal", [])).filter(e => e && e.text);
+  const old = all.filter(e => e.ts <= (sec * 1000) - RESURFACE_MIN_AGE_DAYS * 86400000);
+  if (!old.length) return;
+  await putJSON(env, RESURFACE_KEY, day);
+  const pick = old[fnv1a(day + "p") % old.length];
+  const when = fmtWIB(Math.floor(pick.ts / 1000), await uiLang(env));
+  const ai = await lifeMsg(env, "while tidying memory you found the user's old journal entry from " + when + " that says: \"" + pick.text.slice(0, 200) + "\"", "bring this up out of nowhere, like stumbling on a fond memory; tease or react to it in-character, one or two lines");
+  const owner = parseInt((await env.KV.get("owner_chat")) || "0", 10);
+  if (owner && ai) await reply(env, owner, "\u{1F9E0} " + mdTg(esc(ai)));
+}
+
+export async function handleAma(env, msg, chatId) {
+  const L = await uiLang(env);
+  const q = (msg.text || "").replace(/^\/\S+\s*/, "").trim();
+  if (!q) return reply(env, chatId, L.amaUsage);
+  const pk = AMA_KEY + chatId;
+  const last = parseInt((await env.KV.get(pk)) || "0", 10) || 0;
+  if (last && Date.now() - last < AMA_GAP_MS) return notify(env, chatId, L.amaThrottle);
+  await env.KV.put(pk, String(Date.now()));
+  const ai = await lifeMsg(env, "the user asks a META question (out of the story): " + q.slice(0, AMA_Q_CAP), "one-off META mode: answer honestly as yourself (the AI behind this bot) about you, the user, or this story; keep your voice, 2-4 lines, no system formatting, no headers");
+  if (!ai) {
+    try { await env.KV.delete(pk); } catch (_) {}
+    return reply(env, chatId, L.amaFail);
+  }
+  return reply(env, chatId, "\u{1F4AC} " + mdTg(esc(ai)));
+}
+
+export async function lifeDigest(env, L, nowSec) {
+  const sec = nowSec || nowS();
+  const today = dayWIB(sec), yesterday = dayWIB(sec - 86400);
+  let data = "", tail = "";
+  const habits = (await getJSON(env, HABITS_KEY, [])).filter(h => h && h.name);
+  if (habits.length) {
+    await habitsResetLazy(env, habits, today, yesterday);
+    const pendD = habits.filter(h => !h.tgt && h.last_done !== today);
+    const pendW = habits.filter(h => h.tgt && (h.wkc || 0) < h.tgt);
+    if (pendD.length || pendW.length) {
+      tail += "\n" + L.dgHabit(pendD.map(h => esc(h.name)).concat(pendW.map(h => esc(h.name) + " " + (h.wkc || 0) + "/" + h.tgt)).join(", "));
+      data += "Habits pending: " + pendD.map(h => h.name + " (streak " + (h.streak || 0) + " days)").concat(pendW.map(h => h.name + " " + (h.wkc || 0) + "/" + h.tgt + " this week (streak " + (h.streak || 0) + " weeks)")).join(", ") + ". ";
+    }
+  }
+  if (dowWIB(sec) === 1 && (await getJSON(env, SLEEP_WEEK_KEY, "")) !== today) {
+    const log = (await getJSON(env, SLEEP_LOG_KEY, [])).filter(x => x && typeof x.gm === "number").slice(0, 7);
+    if (log.length) {
+      const avg = Math.round(log.reduce((a, b) => a + (b.h || 0), 0) / log.length * 10) / 10;
+      await putJSON(env, SLEEP_WEEK_KEY, today);
+      tail += "\n" + L.dgSleep(avg, log.length);
+      data += "Sleep last " + log.length + " nights avg " + avg + "h. ";
+    }
+  }
+  if (today.endsWith("-01") && (await getJSON(env, EXP_MONTH_KEY, "")) !== monWIB(sec)) {
+    const arr = (await getJSON(env, EXP_KEY, [])).filter(e => e && typeof e.amt === "number");
+    const prevMon = monWIB(sec - 86400);
+    const rows = arr.filter(e => monWIB(Math.floor(e.ts / 1000)) === prevMon);
+    if (rows.length) {
+      const { total, big } = mtdOf(rows, prevMon);
+      await putJSON(env, EXP_MONTH_KEY, monWIB(sec));
+      tail += "\n" + L.dgExp(prevMon, rp(total), rows.length, bigTxt(big));
+      data += "Spending last month (" + prevMon + "): " + rp(total) + " in " + rows.length + " entries. ";
+    }
+  }
+  return { data: data.trim(), tail };
+}
+
+const SYS_HPLAN = "HABIT_PLAN PROGRAM. You design a small habit-building program for a casual chat user. Reply with STRICT JSON only - no markdown fence, no commentary. Shape: {\"topic\":\"...\",\"habits\":[{\"name\":\"...\",\"target\":2,\"why\":\"...\"}],\"schedule\":\"...\"} - 2 to 4 habits that together serve the requested topic; each 'name' = 1-4 short words (max 30 chars); 'target' = times PER WEEK, start SLOW (1-3, never everything daily); 'why' = one short sentence; 'schedule' = a compact week-by-week plan (max 600 chars, plain newlines). Write 'why' and 'schedule' in the same language as the user's topic.";
+const SYS_HPLAN_REVIEW = "HABIT_PLAN REVIEW. You review a user's AI-guided habit plan at its weekly checkpoint. Reply with STRICT JSON only - no markdown fence, no commentary. Shape: {\"notes\":\"...\",\"changes\":[{\"name\":\"...\",\"target\":3}],\"schedule\":\"...\"} - 'notes' = one-two sentences reacting to the ACTUAL progress data (encouraging, honest); 'changes' = ONLY habits whose weekly target should change ('target' 1-7: ramp up when met easily, lower when consistently missed; habits doing fine are omitted); 'schedule' = the revised compact plan (max 600 chars). Write 'notes' and 'schedule' in the same language as the habit plan topic.";
+
+function validPlan(j) {
+  if (!j || !Array.isArray(j.habits)) return null;
+  const hs = j.habits.slice(0, HABIT_PLAN_HABITS_MAX).map(x => ({
+    name: String((x && x.name) || "").trim().slice(0, 30),
+    target: Math.max(1, Math.min(7, parseInt(x && x.target, 10) || 0)),
+    why: String((x && x.why) || "").slice(0, 160)
+  })).filter(h => h.name);
+  if (!hs.length) return null;
+  return { topic: String(j.topic || "").slice(0, 60), habits: hs, schedule: String(j.schedule || "").slice(0, 600) };
+}
+function validReview(j, plan) {
+  if (!j) return null;
+  const names = plan.habits.map(h => h.name.toLowerCase());
+  const changes = (Array.isArray(j.changes) ? j.changes : []).map(c => ({
+    name: String((c && c.name) || "").trim().slice(0, 30),
+    target: Math.max(1, Math.min(7, parseInt(c && c.target, 10) || 0))
+  })).filter(c => c.name && names.includes(c.name.toLowerCase()));
+  return { notes: String(j.notes || "").slice(0, 300), changes, schedule: String(j.schedule || "").slice(0, 600) || plan.schedule || "" };
+}
+async function aiPlanJSON(env, sys, userMsg, cap) {
+  let out = "";
+  try {
+    const msgs = [{ role: "system", content: sys }, { role: "user", content: userMsg }];
+    for await (const d of chatStream(env, msgs, cap)) out += d;
+  } catch (_) { return null; }
+  const m = stripThink(out).match(/\{[\s\S]*\}/);
+  if (!m) return null;
+  try { return JSON.parse(m[0]); } catch (_) { return null; }
+}
+async function editPlanView(env, chatId, mid, v) {
+  if (mid) {
+    const j = await tg(env, "editMessageText", { chat_id: chatId, message_id: mid, text: v.text, parse_mode: "HTML", reply_markup: v.markup });
+    if (j && j.ok) return;
+  }
+  await tg(env, "sendMessage", { chat_id: chatId, text: v.text, parse_mode: "HTML", reply_markup: v.markup });
+}
+function planRows(p, L, arr) {
+  return p.habits.map(h => {
+    const hh = arr ? arr.find(x => x.id === h.hid) : null;
+    return L.hpRow(esc(h.name), h.target, hh ? (hh.wkc || 0) : 0, hh ? (hh.streak || 0) : 0, !!hh);
+  }).join("\n");
+}
+function planConfirmView(p, L) {
+  return {
+    text: L.hpHead + "\n" + L.hpTopic(esc(p.topic || "-")) + "\n" + planRows(p, L, null) + "\n" + L.hpSchedule(esc(p.schedule || "")),
+    markup: { inline_keyboard: p.habits.map((h, i) => [{ text: "➕ " + h.name.slice(0, 18) + " (" + h.target + "×)", callback_data: "hp:add:" + i }]).concat([[{ text: L.hpAddAll, callback_data: "hp:all" }, { text: L.hpSkip, callback_data: "hp:no" }], [{ text: L.home, callback_data: "menu" }]]) }
+  };
+}
+function planAppliedView(p, L, arr) {
+  return {
+    text: L.hpHead + "\n" + L.hpTopic(esc(p.topic || "-")) + "\n" + planRows(p, L, arr) + "\n" + L.hpSchedule(esc(p.schedule || "")) + (p.last_review && p.last_review !== wkOf() ? "\n" + L.hpRevDue : ""),
+    markup: { inline_keyboard: [[{ text: L.hpRevBtn, callback_data: "hp:review" }, { text: L.hpDelBtn, callback_data: "hp:no" }], [{ text: L.home, callback_data: "menu" }]] }
+  };
+}
+function planReviewView(p, rv, L) {
+  const ch = rv.changes.length ? rv.changes.map(c => {
+    const old = (p.habits.find(h => h.name.toLowerCase() === c.name.toLowerCase()) || {}).target || "?";
+    return L.hpRevRow(esc(c.name), old, c.target);
+  }).join("\n") : L.hpRevNone;
+  return {
+    text: L.hpRevHead + "\n" + (rv.notes ? esc(rv.notes) + "\n" : "") + ch + (rv.schedule && rv.schedule !== p.schedule ? "\n" + L.hpSchedule(esc(rv.schedule)) : ""),
+    markup: { inline_keyboard: [[{ text: L.hpApply, callback_data: "hp:rok" }, { text: L.hpRevSkip, callback_data: "hp:rskip" }], [{ text: L.home, callback_data: "menu" }]] }
+  };
+}
+async function planNudgeMaybe(env, plan) {
+  if (!plan.applied) return;
+  const wk = wkOf();
+  if (plan.last_review === wk || plan.nudged_wk === wk) return;
+  plan.nudged_wk = wk;
+  await putJSON(env, HABIT_PLAN_KEY, plan);
+  await lifeNote(env, "the habit plan '" + (plan.topic || "custom") + "' is due for its weekly review — ask how the week went and point them to /habit plan review");
+}
+export async function handleHabitPlan(env, msg, chatId) {
+  const L = await uiLang(env);
+  const raw = (msg.text || "").replace(/^\/\S+\s*/, "").trim();
+  const arg = raw.replace(/^plan\s*/i, "").trim();
+  const plan = await getJSON(env, HABIT_PLAN_KEY, null);
+  if (/^del\b/i.test(arg)) {
+    if (!plan) return reply(env, chatId, L.hpNone);
+    await env.KV.delete(HABIT_PLAN_KEY);
+    return notify(env, chatId, L.hpDelOk);
+  }
+  if (/^review\b/i.test(arg)) return habitPlanReview(env, chatId, 0);
+  if (!arg) {
+    if (!plan) return reply(env, chatId, L.hpHead + "\n" + L.hpEmpty + "\n" + L.hpUsage);
+    await planNudgeMaybe(env, plan);
+    const arr = (await getJSON(env, HABITS_KEY, [])).filter(h => h && h.name);
+    const v = plan.applied ? planAppliedView(plan, L, arr) : planConfirmView(plan, L);
+    return tg(env, "sendMessage", { chat_id: chatId, text: v.text, parse_mode: "HTML", reply_markup: v.markup });
+  }
+  if (plan && plan.applied) return reply(env, chatId, L.hpBusy(esc(plan.topic || "-")));
+  await notify(env, chatId, L.hpGen(esc(arg.slice(0, 60))));
+  const j = await aiPlanJSON(env, SYS_HPLAN, "Design a habit-building program for this topic: " + arg.slice(0, 200), 700);
+  const p = validPlan(j);
+  if (!p) return notify(env, chatId, L.hpFail);
+  p.created = nowS(); p.applied = false; p.reviews = 0; p.last_review = ""; p.nudged_wk = "";
+  await putJSON(env, HABIT_PLAN_KEY, p);
+  const v = planConfirmView(p, L);
+  return tg(env, "sendMessage", { chat_id: chatId, text: v.text, parse_mode: "HTML", reply_markup: v.markup });
+}
+export async function habitPlanReview(env, chatId, mid) {
+  const L = await uiLang(env);
+  const plan = await getJSON(env, HABIT_PLAN_KEY, null);
+  if (!plan) return reply(env, chatId, L.hpNone);
+  if (!plan.applied) return reply(env, chatId, L.hpNoHabits);
+  const arr = (await getJSON(env, HABITS_KEY, [])).filter(h => h && h.name);
+  const prog = plan.habits.filter(h => h.hid > 0).map(h => {
+    const hh = arr.find(x => x.id === h.hid) || {};
+    return { name: h.name, target: hh.tgt || h.target, wkc: hh.wkc || 0, ws: hh.streak || 0 };
+  });
+  if (!prog.length) return reply(env, chatId, L.hpNoHabits);
+  await notify(env, chatId, L.hpRevGen);
+  const j = await aiPlanJSON(env, SYS_HPLAN_REVIEW, "Habit plan '" + (plan.topic || "custom") + "'. Current schedule: " + (plan.schedule || "-") + ". Progress THIS week per habit: " + prog.map(p2 => p2.name + " " + p2.wkc + "/" + p2.target + " (week streak " + p2.ws + ")").join("; ") + ". Suggest this week's adjustment.", 700);
+  const rv = validReview(j, plan);
+  if (!rv) return notify(env, chatId, L.hpRevFail);
+  plan.rv = rv;
+  await putJSON(env, HABIT_PLAN_KEY, plan);
+  return editPlanView(env, chatId, mid, planReviewView(plan, rv, L));
+}
+export async function handleHplanCb(env, chatId, mid, arg) {
+  const L = await uiLang(env);
+  const plan = await getJSON(env, HABIT_PLAN_KEY, null);
+  if (!plan) return L.hpNone;
+  const parts = arg.split(":");
+  const op = parts[0];
+  if (op === "review") { await habitPlanReview(env, chatId, mid); return ""; }
+  if (op === "no") {
+    await env.KV.delete(HABIT_PLAN_KEY);
+    await editPlanView(env, chatId, mid, { text: L.hpHead + "\n" + L.hpDelOk, markup: { inline_keyboard: [[{ text: L.home, callback_data: "menu" }]] } });
+    return "";
+  }
+  if (op === "add" || op === "all") {
+    const arr = (await getJSON(env, HABITS_KEY, [])).filter(h => h && h.name);
+    const picks = op === "all" ? plan.habits.map((_, i) => i) : [parseInt(parts[1], 10)];
+    let added = 0, firstName = "";
+    for (const i of picks) {
+      const h = plan.habits[i];
+      if (!h || h.hid) continue;
+      if (arr.length >= HABIT_MAX) return L.hFull(HABIT_MAX);
+      if (arr.some(x => String(x.name).toLowerCase() === h.name.toLowerCase())) { h.hid = -1; continue; }
+      const id = (arr.reduce((m, x) => Math.max(m, x.id || 0), 0) + 1);
+      arr.push(Object.assign({ id, name: h.name, streak: 0, last_done: "" }, { tgt: h.target, wk: wkOf(), wkc: 0 }));
+      h.hid = id; added++;
+      if (!firstName) firstName = h.name;
+    }
+    if (added) {
+      await putJSON(env, HABITS_KEY, arr);
+      if (!plan.applied) { plan.applied = true; plan.wk = wkOf(); await lifeNote(env, "started an AI-guided habit plan '" + (plan.topic || "custom") + "'"); }
+      await putJSON(env, HABIT_PLAN_KEY, plan);
+    }
+    await editPlanView(env, chatId, mid, plan.applied ? planAppliedView(plan, L, arr) : planConfirmView(plan, L));
+    return added ? L.hpAdded(esc(firstName)) : "";
+  }
+  if (op === "rok") {
+    const rv = plan.rv;
+    if (!rv) return "";
+    const arr = (await getJSON(env, HABITS_KEY, [])).filter(h => h && h.name);
+    for (const c of rv.changes) {
+      const h = arr.find(x => String(x.name).toLowerCase() === c.name.toLowerCase());
+      if (h) h.tgt = c.target;
+    }
+    await putJSON(env, HABITS_KEY, arr);
+    plan.schedule = rv.schedule || plan.schedule;
+    plan.last_review = wkOf(); plan.nudged_wk = ""; plan.reviews = (plan.reviews || 0) + 1; plan.rv = null;
+    await putJSON(env, HABIT_PLAN_KEY, plan);
+    const sum = rv.changes.length ? rv.changes.map(c => c.name + " -> " + c.target + "x/week").join(", ") : "targets kept as is";
+    await lifeNote(env, "habit plan '" + (plan.topic || "custom") + "' weekly review #" + plan.reviews + " applied: " + sum);
+    await editPlanView(env, chatId, mid, planAppliedView(plan, L, arr));
+    return L.hpApplied;
+  }
+  if (op === "rskip") {
+    plan.rv = null;
+    plan.last_review = wkOf(); plan.nudged_wk = ""; plan.reviews = (plan.reviews || 0) + 1;
+    await putJSON(env, HABIT_PLAN_KEY, plan);
+    const arr = (await getJSON(env, HABITS_KEY, [])).filter(h => h && h.name);
+    await editPlanView(env, chatId, mid, planAppliedView(plan, L, arr));
+    return L.hpSkipped;
+  }
+  return "";
+}
