@@ -67,7 +67,8 @@ function printHelp() {
                                     cron?, skipTg?)
   node setup.mjs --dry-run          print the plan, touch nothing
   node setup.mjs --update           pull the latest code from the repo and redeploy with the
-                                    saved credentials (setup-saved.json; or --update --config f.json)
+                                    saved credentials (setup-saved.json; or --update --config f.json);
+                                    skips when already up to date — add --force to redeploy anyway
   node setup.mjs --verify           live-check the saved keys (AI endpoint, Last.fm, search, IG cookie)
   node setup.mjs --uninstall        remove the worker + its KV + its D1 (asks for confirmation;
                                     or --uninstall --config f.json with cfToken, workerName, confirm)
@@ -292,26 +293,48 @@ async function verifyKeys(cfg, interactive) {
   } catch { warn("Instagram unreachable — can't verify IG_COOKIE"); }
   return cfg;
 }
-async function updateFlow(cfgIn) {
+async function updateFlow(cfgIn, force) {
   const cfg = Object.assign({}, loadSaved() || {}, cfgIn || {});
   if (!cfg.cfToken || !cfg.tgToken || !cfg.aiBase || !cfg.aiKey || !cfg.aiModel)
     die("update needs full credentials — run the installer once and save them (setup-saved.json), or pass --update --config f.json");
   step("1/2 update code from the repo");
   let mode = "";
+  let updated = false;
   if (existsSync(join(ROOT, ".git"))) {
     const g = (args) => spawnSync("git", ["-C", ROOT, ...args], { encoding: "utf8" });
     const remote = (g(["remote", "get-url", "origin"]).stdout || "").trim();
     if (remote.indexOf("kibo") !== -1) {
       const fetch = g(["fetch", "origin", "main"]);
       if (fetch.status === 0) {
-        const rst = g(["reset", "--hard", "origin/main"]);
-        if (rst.status === 0) {
+        const head = (g(["rev-parse", "HEAD"]).stdout || "").trim();
+        const target = (g(["rev-parse", "origin/main"]).stdout || "").trim();
+        if (!force && head && target && head === target) {
           mode = "git";
-          const sha = (g(["rev-parse", "--short", "HEAD"]).stdout || "").trim();
-          ok(`code updated: git reset to origin/main @ ${sha}`);
-        } else console.log("  ⚠ git reset failed (" + (rst.stderr || "unknown") + ") — trying tarball");
+          ok(`code already up to date @ ${head.slice(0, 7)} (origin/main)`);
+        } else {
+          const rst = g(["reset", "--hard", "origin/main"]);
+          if (rst.status === 0) {
+            mode = "git";
+            updated = true;
+            const sha = (g(["rev-parse", "--short", "HEAD"]).stdout || "").trim();
+            ok(`code updated: git reset to origin/main @ ${sha}`);
+          } else console.log("  ⚠ git reset failed (" + (rst.stderr || "unknown") + ") — trying tarball");
+        }
       } else console.log("  ⚠ git fetch failed (" + (fetch.stderr || "unknown") + ") — trying tarball");
     } else console.log("  ⚠ origin remote is not the kibo repo (" + remote + ") — using tarball");
+  }
+  if (!mode && !force) {
+    let remoteVer = "";
+    try {
+      const rv = await fetch("https://raw.githubusercontent.com/ruqes/kibo/main/kibo/src/consts.js");
+      if (rv.ok) remoteVer = ((await rv.text()).match(/BOT_VER\s*=\s*"([^"]*)"/) || ["", ""])[1];
+    } catch {}
+    let localVer = "";
+    try { localVer = (readFileSync(join(ROOT, "kibo", "src", "consts.js"), "utf8").match(/BOT_VER\s*=\s*"([^"]*)"/) || ["", ""])[1]; } catch {}
+    if (remoteVer && localVer && remoteVer === localVer) {
+      mode = "tar";
+      ok(`code already up to date (version ${localVer})`);
+    }
   }
   if (!mode) {
     const r = await fetch("https://codeload.github.com/ruqes/kibo/tar.gz/refs/heads/main");
@@ -323,7 +346,12 @@ async function updateFlow(cfgIn) {
     if (t.status !== 0) die("tar extract failed — is 'tar' on PATH? (or clone the repo with git and re-run --update)");
     cpSync(join(tmp, "kibo-main"), ROOT, { recursive: true });
     rmSync(tmp, { recursive: true, force: true });
+    updated = true;
     ok("code updated: tarball ruqes/kibo@main (setup-saved.json, node_modules, dist untouched)");
+  }
+  if (mode && !updated && !force) {
+    ok("already up to date — nothing to redeploy (use --force to redeploy anyway)");
+    return;
   }
   step("2/2 redeploy with the saved credentials");
   let cfgPath = SAVED;
@@ -344,8 +372,8 @@ async function main() {
     if (argv.includes("--config")) {
       const ci = argv[argv.indexOf("--config") + 1];
       if (!ci) die("--config needs a file path");
-      await updateFlow(JSON.parse(readFileSync(ci, "utf8")));
-    } else await updateFlow();
+      await updateFlow(JSON.parse(readFileSync(ci, "utf8")), argv.includes("--force"));
+    } else await updateFlow(null, argv.includes("--force"));
     return;
   }
   if (argv.includes("--verify")) {
