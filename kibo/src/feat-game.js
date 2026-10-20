@@ -1,5 +1,5 @@
 import { tg, notify, getJSON, putJSON, esc, reply, mdTg, scheduleDelete } from "./base.js";
-import { uiLang, UI_SEP } from "./ui.js";
+import { uiLang, UI_SEP, UI } from "./ui.js";
 import { GAME_WORD_KEY, GAME_QUIZ_KEY, GAME_PVP_KEY, WORD_REWARDS, QUIZ_PTS, QUIZ_HIST_KEY, QUIZ_HIST_MAX, WIB, BET_MIN, BET_MAX, BET_RAKE, PVP_STAKE, GAME_LYRIC_KEY, LYRIC_PTS, LYRIC_POOL_MAX, GAME_SONG_KEY, GAME_FAN_KEY, SONG_PTS, SONG_FAN_PTS, SONG_TRY_MAX, GAME_SONG_STAT_KEY, GAME_FAN_STAT_KEY, SONG_STREAK_CAP, FAN_MIN_SONGS, FAN_MENU_MAX, LFM_USER_KEY, LFM_USER_DEFAULT, UA, DIVE_STATE_KEY, DIVE_PRAC_KEY, GAME_IDLE_REG, GAME_IDLE_MS } from "./consts.js";
 import { askSet, askClear } from "./ask.js";
 import { questDay, addPts, remindMsg } from "./feat-remind.js";
@@ -7,7 +7,7 @@ import { chatStream } from "./feat-personal.js";
 import { stripThink } from "./ai.js";
 import { gameRecBump } from "./feat-aistats.js";
 
-export const WORDS = [
+export const WORDS_ID = [
   "agama", "aktif", "ambil", "badan", "bakar", "balik", "barat", "batas", "bawah", "bayar",
   "bayam", "bedak", "bekas", "belah", "belas", "benda", "beras", "besar", "beton", "bisik",
   "bocor", "bonus", "bukan", "bukit", "bulan", "bunga", "bunyi", "cabai", "cakap", "candi",
@@ -34,16 +34,281 @@ export const WORDS = [
   "takut", "taman", "tanam", "tanda", "tapak", "tarik", "tawar", "tebal", "terik", "tidur",
   "tiang", "tikus", "tirai", "tubuh", "tujuh", "tukar", "tulis", "tunas", "unjuk", "utama",
   "waktu", "walau", "wangi", "warna", "warta", "yakin", "zaman", "zebra"
-];
 
-export function gameWord(dayNum) { return WORDS[dayNum % WORDS.length].toUpperCase(); }
-export function pvpWord(dayNum) {
-  const w = WORDS[(dayNum + 97) % WORDS.length].toUpperCase();
-  return w === gameWord(dayNum) ? WORDS[(dayNum + 98) % WORDS.length].toUpperCase() : w;
+];
+export const WORDS_EN = [
+  "apple",
+  "beach",
+  "brain",
+  "bread",
+  "chair",
+  "chest",
+  "clock",
+  "cloud",
+  "dance",
+  "dream",
+  "earth",
+  "feast",
+  "flame",
+  "ghost",
+  "grape",
+  "house",
+  "juice",
+  "knife",
+  "lemon",
+  "light",
+  "mouse",
+  "mouth",
+  "night",
+  "ocean",
+  "onion",
+  "paint",
+  "piano",
+  "plant",
+  "quiet",
+  "river",
+  "salad",
+  "shore",
+  "smile",
+  "snake",
+  "sound",
+  "spice",
+  "stone",
+  "sugar",
+  "table",
+  "tiger",
+  "tooth",
+  "train",
+  "uncle",
+  "voice",
+  "watch",
+  "water",
+  "whale",
+  "wheat",
+  "world",
+  "yeast",
+  "zebra",
+  "amber",
+  "angel",
+  "basil",
+  "bloom",
+  "brave",
+  "broad",
+  "camel",
+  "candy",
+  "cargo",
+  "cedar",
+  "champ",
+  "charm",
+  "cheer",
+  "chill",
+  "claim",
+  "clash",
+  "clean",
+  "climb",
+  "comic",
+  "coral",
+  "couch",
+  "crane",
+  "crisp",
+  "crown",
+  "crust",
+  "curve",
+  "delta",
+  "demon",
+  "donut",
+  "drill",
+  "dwarf",
+  "eagle",
+  "ebony",
+  "ember",
+  "fancy",
+  "fable",
+  "fiber",
+  "field",
+  "fifth",
+  "flare",
+  "float",
+  "flock",
+  "flood",
+  "flour",
+  "frost",
+  "fruit",
+  "gauge",
+  "gecko",
+  "giant",
+  "glass",
+  "gleam",
+  "globe",
+  "glove",
+  "grain",
+  "grass",
+  "green",
+  "grill",
+  "groan",
+  "grove",
+  "guide",
+  "habit",
+  "happy",
+  "heart",
+  "hedge",
+  "helix",
+  "hobby",
+  "honey",
+  "humor",
+  "ivory",
+  "jelly",
+  "jewel",
+  "joint",
+  "joker",
+  "jolly",
+  "judge",
+  "kayak",
+  "koala",
+  "label",
+  "labor",
+  "latch",
+  "laugh",
+  "layer",
+  "lever",
+  "lilac",
+  "linen",
+  "liver",
+  "llama",
+  "lodge",
+  "loyal",
+  "lunar",
+  "lunch",
+  "lyric",
+  "mango",
+  "maple",
+  "march",
+  "marsh",
+  "medal",
+  "melon",
+  "mercy",
+  "merit",
+  "metal",
+  "meter",
+  "midst",
+  "mimic",
+  "minor",
+  "model",
+  "money",
+  "month",
+  "moral",
+  "motor",
+  "mount",
+  "movie",
+  "music",
+  "nanny",
+  "naval",
+  "nerve",
+  "never",
+  "noble",
+  "north",
+  "notch",
+  "novel",
+  "nudge",
+  "nurse",
+  "oasis",
+  "olive",
+  "opera",
+  "orbit",
+  "otter",
+  "outer",
+  "owner",
+  "oxide",
+  "panda",
+  "panel",
+  "panic",
+  "pause",
+  "peace",
+  "peach",
+  "pearl",
+  "pedal",
+  "penny",
+  "perch",
+  "phase",
+  "phone",
+  "photo",
+  "piece",
+  "pilot",
+  "pinch",
+  "pivot",
+  "pizza",
+  "plain",
+  "plank",
+  "plaza",
+  "point",
+  "polar",
+  "porch",
+  "pouch",
+  "pound",
+  "power",
+  "pride",
+  "prime",
+  "prize",
+  "proof",
+  "proud",
+  "prove",
+  "pulse",
+  "punch",
+  "pupil",
+  "purse",
+  "quilt",
+  "quirk",
+  "radar",
+  "radio",
+  "raise",
+  "rally",
+  "ranch",
+  "range",
+  "rapid",
+  "ratio",
+  "raven",
+  "razor",
+  "realm",
+  "rebel",
+  "reign",
+  "relax",
+  "relay",
+  "reply",
+  "ridge",
+  "rigid",
+  "rinse",
+  "risky",
+  "rival",
+  "roast",
+  "robot",
+  "rocky",
+  "rogue",
+  "rotor",
+  "rough",
+  "round",
+  "royal",
+  "rural",
+  "salon",
+  "salsa",
+  "sauce",
+  "scale",
+  "scarf",
+  "scene",
+  "scent"
+];
+export const WORDS = WORDS_ID;
+
+export const wordPool = L => (L === UI.id ? WORDS_ID : WORDS_EN);
+export function gameWord(dayNum, pool) { const p = pool || WORDS_ID; return p[dayNum % p.length].toUpperCase(); }
+export function pvpWord(dayNum, pool) {
+  const p = pool || WORDS_ID;
+  const w = p[(dayNum + 97) % p.length].toUpperCase();
+  return w === gameWord(dayNum, p) ? p[(dayNum + 98) % p.length].toUpperCase() : w;
 }
-const pracWord = not => {
-  let w = WORDS[Math.floor(Math.random() * WORDS.length)].toUpperCase();
-  while (not && w === not) w = WORDS[Math.floor(Math.random() * WORDS.length)].toUpperCase();
+const pracWord = (not, pool) => {
+  const p = pool || WORDS_ID;
+  let w = p[Math.floor(Math.random() * p.length)].toUpperCase();
+  while (not && w === not) w = p[Math.floor(Math.random() * p.length)].toUpperCase();
   return w;
 };
 const dayNumOf = nowSec => Math.floor((nowSec + WIB) / 86400);
@@ -117,13 +382,14 @@ export async function gameMenu(env, chatId, mid) {
 
 export async function gameWordStart(env, chatId, mid) {
   const L = await uiLang(env);
+  const wp = wordPool(L);
   const day = todayDay();
   let st = await getJSON(env, GAME_WORD_KEY + chatId, null);
   if (st && st.d === day && st.done !== 0) {
-    st = { d: day, t: pracWord(st.t), g: [], done: 0, p: 1, mid: mid || 0 };
+    st = { d: day, t: pracWord(st.t, wp), g: [], done: 0, p: 1, mid: mid || 0 };
     await putJSON(env, GAME_WORD_KEY + chatId, st);
   } else if (!st || st.d !== day) {
-    st = { d: day, t: gameWord(dayNumOf(Math.floor(Date.now() / 1000))), g: [], done: 0, mid: mid || 0 };
+    st = { d: day, t: gameWord(dayNumOf(Math.floor(Date.now() / 1000)), wp), g: [], done: 0, mid: mid || 0 };
     await putJSON(env, GAME_WORD_KEY + chatId, st);
   } else if (mid && st.mid !== mid) { st.mid = mid; await putJSON(env, GAME_WORD_KEY + chatId, st); }
   return editView(env, chatId, mid || st.mid, gameView(st, L));
@@ -168,9 +434,10 @@ export async function gameIntercept(env, msg, chatId, text) {
   return true;
 }
 
-export function pvpCandidates(target, guesses) {
+export function pvpCandidates(target, guesses, pool) {
   const obs = guesses.map(g => gridRow(g, target));
-  return WORDS.map(w => w.toUpperCase()).filter(w => {
+  const p = pool || WORDS_ID;
+  return p.map(w => w.toUpperCase()).filter(w => {
     if (guesses.includes(w)) return false;
     return guesses.every((g, i) => gridRow(g, w) === obs[i]);
   });
@@ -206,6 +473,7 @@ function pvpView(st, L) {
 
 export async function pvpStart(env, chatId, mid) {
   const L = await uiLang(env);
+  const wp = wordPool(L);
   const day = todayDay();
   const old = await getJSON(env, GAME_PVP_KEY + chatId, null);
   if (old && old.d === day && old.done === 0) return editView(env, chatId, mid || old.mid, pvpView(old, L));
@@ -214,13 +482,14 @@ export async function pvpStart(env, chatId, mid) {
     const q = await getJSON(env, "quest", {});
     if ((q.points || 0) < PVP_STAKE) { await notify(env, chatId, L.pvpPoor(PVP_STAKE, q.points || 0)); return gameMenu(env, chatId, mid); }
   }
-  const st = { d: day, t: prac ? pracWord(old && old.t) : pvpWord(dayNumOf(Math.floor(Date.now() / 1000))), gU: [], gC: [], done: 0, winner: null, stake: prac ? 0 : PVP_STAKE, p: prac ? 1 : 0, mid: mid || 0 };
+  const st = { d: day, t: prac ? pracWord(old && old.t, wp) : pvpWord(dayNumOf(Math.floor(Date.now() / 1000)), wp), gU: [], gC: [], done: 0, winner: null, stake: prac ? 0 : PVP_STAKE, p: prac ? 1 : 0, mid: mid || 0 };
   await putJSON(env, GAME_PVP_KEY + chatId, st);
   return editView(env, chatId, mid || st.mid, pvpView(st, L));
 }
 
 export async function pvpGuess(env, chatId, mid, raw) {
   const L = await uiLang(env);
+  const wp = wordPool(L);
   const w = String(raw || "").trim().toUpperCase();
   const st = await getJSON(env, GAME_PVP_KEY + chatId, null);
   if (!st || st.d !== todayDay() || st.done !== 0) { await notify(env, chatId, L.gmNoActive); return; }
@@ -230,8 +499,8 @@ export async function pvpGuess(env, chatId, mid, raw) {
   let winner = null;
   if (w === st.t) winner = "U";
   else {
-    let pool = pvpCandidates(st.t, st.gC);
-    if (!pool.length) pool = WORDS.map(x => x.toUpperCase()).filter(x => !st.gC.includes(x));
+    let pool = pvpCandidates(st.t, st.gC, wp);
+    if (!pool.length) pool = wp.map(x => x.toUpperCase()).filter(x => !st.gC.includes(x));
     const cg = pool[Math.floor(Math.random() * pool.length)];
     st.gC.push(cg);
     if (cg === st.t) winner = "C";
