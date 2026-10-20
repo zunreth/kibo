@@ -380,7 +380,7 @@ const LYRIC_NUMS = ["1️⃣", "2️⃣", "3️⃣", "4️⃣"];
 export function lyricPickLine(pl, title, artist) {
   const tl = baseTitle(title), al = artist.toLowerCase();
   const tl4 = tl.split(" ").slice(0, 4).join(" ");
-  const cands = [];
+  const lines = [];
   for (let ln of pl.split("\n")) {
     ln = ln.trim().replace(/^\[.*\]$|^\(.*\)$/, "").trim();
     if (ln.length < 18 || ln.length > 110) continue;
@@ -388,9 +388,19 @@ export function lyricPickLine(pl, title, artist) {
     if (lo.includes(tl) || (tl4.length > 8 && lo.includes(tl4)) || (al.length > 2 && lo.includes(al))) continue;
     const w = ln.split(/\s+/).length;
     if (w < 4 || w > 16) continue;
-    cands.push(ln);
+    lines.push(ln);
   }
-  return cands.length ? cands[Math.floor(Math.random() * cands.length)] : null;
+  if (!lines.length) return null;
+  const i = Math.floor(Math.random() * lines.length);
+  let snippet = lines[i], last = i;
+  for (let k = 1; k <= 2 && i + k < lines.length; k++) {
+    if (snippet.length + lines[i + k].length > 220) break;
+    snippet += "\n" + lines[i + k];
+    last = i + k;
+    if (snippet.length >= 90) break;
+  }
+  if (last === i && i > 0 && snippet.length + lines[i - 1].length <= 220) snippet = lines[i - 1] + "\n" + snippet;
+  return snippet;
 }
 
 async function lyricFetchReal(env, title, artist) {
