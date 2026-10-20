@@ -107,7 +107,6 @@ import {
 } from './kv.js';
 import {
   UI,
-  QUESTS,
   uiLang,
   fmtTok,
   fmtWIB,

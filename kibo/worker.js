@@ -114,7 +114,6 @@ import {
 import { wrapStore, d1Sweep } from './src/store-d1.js';
 import {
   UI,
-  QUESTS,
   uiLang,
   fmtTok,
   fmtWIB,

@@ -522,7 +522,7 @@ export async function gameLeave(env, chatId) {
   for (const key of [GAME_SONG_KEY, GAME_FAN_KEY]) {
     let st = null;
     try { st = await getJSON(env, key + chatId, null); } catch (_) {}
-    if (!st || st.done || !st.amid) continue;
+    if (!st || !st.amid) continue;
     try { await tg(env, "deleteMessage", { chat_id: chatId, message_id: st.amid }); } catch (_) {}
     st.amid = 0;
     st.paused = 1;

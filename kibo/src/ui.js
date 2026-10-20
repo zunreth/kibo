@@ -1507,7 +1507,6 @@ export const UI = {
   }
 };
 
-export const QUESTS = UI.id.quests;
 export async function uiLang(env) {
   return (await env.KV.get(UI_LANG_KEY)) === "id" ? UI.id : UI.en;
 }

@@ -110,7 +110,6 @@ import {
 } from './kv.js';
 import {
   UI,
-  QUESTS,
   uiLang,
   fmtTok,
   fmtWIB,
@@ -212,6 +211,7 @@ export async function questSys(env) {
   const nowSec = Math.floor(Date.now() / 1000);
   const q = await getJSON(env, "quest", {});
   const day = questDay(nowSec);
+  const pool = (await uiLang(env)).quests;
   const sq = await getJSON(env, "squest", {});
   const sl = ((sq.day || "") === day) ? sq : { day: day, n: 0, list: [] };
   const slot = SIDEQ_MAX - (sl.list || []).filter(x => !x.done && !x.skipped).length;
@@ -223,10 +223,10 @@ export async function questSys(env) {
     q.gNote = null;
     try { await putJSON(env, "quest", q); } catch (_) {}
   }
-  if (!(q.day === day && !q.done && !q.skipped && QUESTS[q.idx])) return sideQSys(slot, left) + note;
+  if (!(q.day === day && !q.done && !q.skipped && pool[q.idx])) return sideQSys(slot, left) + note;
   const e = await getJSON(env, "exp", { xp: 0 });
   const lv = Math.floor((e.xp || 0) / XP_PER_LEVEL) + 1;
-  return "TODAY'S QUEST (from the system, not the user): '" + QUESTS[q.idx] + "' \u2014 status: not done yet, streak " + (q.streak || 0) + " days, total " + (q.points || 0) + " points, XP " + (e.xp || 0) + " (Level " + lv + ") (each completion gives +10 points & +10 XP; the higher the streak, the prouder you get to act). Do NOT bring up this quest first unless the user mentions it or presses the button. If the user says they did this quest (or tells the outcome), praise them + act proud per your personality, then WRITE THE EXACT LAST LINE: [[QUEST:done]] \u2014 a system marker, the user must never see it & you need not explain it. (Alternative: call the mark_quest tool with status \"done\" \u2014 same effect. Use the marker OR the tool, never both.) If the user explains they can't do it right now and asks to skip it, write the last line: [[QUEST:skip]] (or mark_quest with status \"skip\"). Just asking around = reply normally WITHOUT any marker. " + sideQSys(slot, left) + note;
+  return "TODAY'S QUEST (from the system, not the user): '" + pool[q.idx] + "' \u2014 status: not done yet, streak " + (q.streak || 0) + " days, total " + (q.points || 0) + " points, XP " + (e.xp || 0) + " (Level " + lv + ") (each completion gives +10 points & +10 XP; the higher the streak, the prouder you get to act). Do NOT bring up this quest first unless the user mentions it or presses the button. If the user says they did this quest (or tells the outcome), praise them + act proud per your personality, then WRITE THE EXACT LAST LINE: [[QUEST:done]] \u2014 a system marker, the user must never see it & you need not explain it. (Alternative: call the mark_quest tool with status \"done\" \u2014 same effect. Use the marker OR the tool, never both.) If the user explains they can't do it right now and asks to skip it, write the last line: [[QUEST:skip]] (or mark_quest with status \"skip\"). Just asking around = reply normally WITHOUT any marker. " + sideQSys(slot, left) + note;
 }
 
 export function sideQSys(slot, left) {
@@ -253,7 +253,8 @@ export async function questMark(env, chatId, act) {
   const nowSec = Math.floor(Date.now() / 1000);
   const day = questDay(nowSec);
   const q = await getJSON(env, "quest", {});
-  if (!(q.day === day && !q.done && !q.skipped && QUESTS[q.idx])) return { ok: false, why: "no open daily quest today" };
+  const pool = (await uiLang(env)).quests;
+  if (!(q.day === day && !q.done && !q.skipped && pool[q.idx])) return { ok: false, why: "no open daily quest today" };
   if (act === "done") {
     q.done = true;
     streakAdvance(q, day, nowSec);
@@ -510,10 +511,10 @@ export function questDay(nowSec) {
   return d.getUTCFullYear() + "-" + pad(d.getUTCMonth() + 1) + "-" + pad(d.getUTCDate());
 }
 
-export function questOfDay(dayStr) {
+export function questOfDay(dayStr, pool) {
   let h = 0;
   for (const c of dayStr) h = (h * 31 + c.charCodeAt(0)) % 997;
-  return h % QUESTS.length;
+  return h % (pool || UI.en.quests).length;
 }
 
 export const XP_PER_LEVEL = 100;
@@ -580,12 +581,14 @@ export async function questReroll(env, chatId) {
   RR_LOCK.set(chatId, nowMs);
   const nowSec = Math.floor(nowMs / 1000);
   const day = questDay(nowSec);
+  const L = await uiLang(env);
+  const pool = L.quests;
   const rr = await getJSON(env, "quest_rr", { day: "", n: 0 });
   if (rr.day !== day) { rr.day = day; rr.n = 0; }
-  if (rr.n >= REROLL_LIMIT) { await notify(env, chatId, (await uiLang(env)).rrLimit(REROLL_LIMIT)); return "limit"; }
+  if (rr.n >= REROLL_LIMIT) { await notify(env, chatId, L.rrLimit(REROLL_LIMIT)); return "limit"; }
   const q = await getJSON(env, "quest", {});
-  const base = (q.day === day && QUESTS[q.idx]) ? q.idx : questOfDay(day);
-  const idx = (base + 1 + Math.floor(Math.random() * (QUESTS.length - 1))) % QUESTS.length;
+  const base = (q.day === day && pool[q.idx]) ? q.idx : questOfDay(day, pool);
+  const idx = (base + 1 + Math.floor(Math.random() * (pool.length - 1))) % pool.length;
   rr.n += 1;
   await putJSON(env, "quest_rr", rr);
   await putJSON(env, "quest", { day: day, idx: idx, done: false, skipped: false, delivered: false, streak: q.streak || 0, points: q.points || 0, lastDone: q.lastDone, mid: q.mid, shields: q.shields || 0, loot: q.loot, gNote: q.gNote });
@@ -628,19 +631,20 @@ export function qresetConfirmView(L, fromQuest) {
 
 export async function fireQuest(env, nowSec) {
   const L = await uiLang(env);
+  const pool = L.quests;
   const q = await getJSON(env, "quest", {});
   const day = questDay(nowSec);
   if (q.day === day && (q.delivered || q.done || q.skipped)) return;
   const fresh = q.day !== day;
-  const idx = fresh ? questOfDay(day) : q.idx;
-  if (!QUESTS[idx]) return;
+  const idx = fresh ? questOfDay(day, pool) : q.idx;
+  if (!pool[idx]) return;
   const owner = await env.KV.get("owner_chat");
   if (!owner) return;
 
-  const aiPitch = (await remindMsg(env, 0, QUESTS[idx], 0, "questNew")).trim();
+  const aiPitch = (await remindMsg(env, 0, pool[idx], 0, "questNew")).trim();
   const j = await tg(env, "sendMessage", aiPitch
     ? { chat_id: owner, text: mdTg(esc(aiPitch)), parse_mode: "HTML", reply_markup: questKb(L) }
-    : { chat_id: owner, text: L.qCron(esc(QUESTS[idx])), parse_mode: "HTML", reply_markup: questKb(L) });
+    : { chat_id: owner, text: L.qCron(esc(pool[idx])), parse_mode: "HTML", reply_markup: questKb(L) });
   const mid = j && j.ok && j.result ? j.result.message_id : null;
   const st = fresh
     ? { day: day, idx: idx, done: false, skipped: false, delivered: true, streak: q.streak || 0, points: q.points || 0, lastDone: q.lastDone, mid: mid, shields: q.shields || 0 }
@@ -653,9 +657,10 @@ export async function questView(env) {
   const day = questDay(nowSec);
   const q = await getJSON(env, "quest", {});
   const fresh = q.day !== day;
-  const idx = fresh ? questOfDay(day) : q.idx;
   const L = await uiLang(env);
-  if (!QUESTS[idx]) return { text: L.questNA, markup: { inline_keyboard: [[{ text: L.home, callback_data: "menu" }]] } };
+  const pool = L.quests;
+  const idx = fresh ? questOfDay(day, pool) : q.idx;
+  if (!pool[idx]) return { text: L.questNA, markup: { inline_keyboard: [[{ text: L.home, callback_data: "menu" }]] } };
   const cur = fresh
     ? Object.assign({}, q, { day: day, idx: idx, done: false, skipped: false, delivered: true, streak: q.streak || 0, points: q.points || 0, lastDone: q.lastDone })
     : q;
@@ -667,7 +672,7 @@ export async function questView(env) {
   const sl = ((sq.day || "") === day) ? sq : { day: day, n: 0, list: [] };
   const act = (sl.list || []).filter(x => !x.done && !x.skipped);
   const text = "\u{1F3AF} <b>QUEST</b>" + UI_SEP +
-    "\u{1F4CC} <b>Daily:</b> " + esc(QUESTS[cur.idx]) + "\n" +
+    "\u{1F4CC} <b>Daily:</b> " + esc(pool[cur.idx]) + "\n" +
     L.qStatus(state, cur.streak || 0) + "\n" +
     "\u{1F4B0} " + L.qPoin + ": " + (cur.points || 0) + "\n" +
     L.qShield(q.shields || 0, SHIELD_MAX) + (q.loot && q.loot.d === day ? lootLine(q.loot, L) : "") + "\n" +
@@ -691,10 +696,11 @@ export async function handleQuest(env, msg, chatId) {
 
 export async function handleQuestCb(env, chatId, mid, arg) {
   const L = await uiLang(env);
+  const pool = L.quests;
   const nowSec = Math.floor(Date.now() / 1000);
   const day = questDay(nowSec);
   const q = await getJSON(env, "quest", {});
-  if (q.day !== day || !QUESTS[q.idx]) {
+  if (q.day !== day || !pool[q.idx]) {
     if (mid) await tg(env, "editMessageText", { chat_id: chatId, message_id: mid, text: L.questStale, parse_mode: "HTML", reply_markup: { inline_keyboard: [] } });
     return;
   }
@@ -722,7 +728,7 @@ export async function handleQuestCb(env, chatId, mid, arg) {
     try { await tg(env, "editMessageReplyMarkup", { chat_id: chatId, message_id: mid, reply_markup: { inline_keyboard: [] } }); } catch (_) {}
   }
   if (reacted) {
-    const ai = await remindMsg(env, 0, QUESTS[q.idx], 0, q.done ? "questDone" : "questSkip");
+    const ai = await remindMsg(env, 0, pool[q.idx], 0, q.done ? "questDone" : "questSkip");
     if (ai) await reply(env, chatId, mdTg(esc(ai)));
     return q.done
       ? shieldMsg + L.qDone(q.streak || 0, (await getJSON(env, "quest", {})).points || 0, lvUp) + lootLine(q.loot, L)

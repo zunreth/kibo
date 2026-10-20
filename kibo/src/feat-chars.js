@@ -106,7 +106,6 @@ import {
 } from './kv.js';
 import {
   UI,
-  QUESTS,
   UI_SEP,
   uiBar,
   uiLang,
