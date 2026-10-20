@@ -48,6 +48,7 @@ import {
   PRESET_IMPORT_KEY,
   PRESET_COMPILED_CAP,
   RP_FORMAT,
+  EDIT_MARKER, EDIT_SIM_MIN, EDIT_LEN_MIN, EDIT_REGEN_MAX_AGE_S,
   VAULT_CHAT_KEY,
   FILE_INDEX_KEY,
   VAULT_SNAPS_KEY,
@@ -654,6 +655,130 @@ export async function handleRewind(env, msg, chatId) {
     await notify(env, chatId, L.rwOk(ok, ids.length));
   } else {
     await notify(env, chatId, L.rwNoCtx(ok, ids.length));
+  }
+}
+
+// === edit fitur (v2.63.0): reply-edit pesan bot + edited_message regen ===
+function normForSim(s) {
+  return String(s || "").toLowerCase().replace(/[*_~>#]/g, " ").replace(/\s+/g, " ").trim();
+}
+
+function simRatio(a, b) {
+  a = normForSim(a); b = normForSim(b);
+  if (!a && !b) return 1;
+  if (!a || !b) return 0;
+  const m = a.length, n = b.length;
+  if (m > 4000 || n > 4000) return 0;
+  if (Math.abs(m - n) > Math.max(m, n) * 0.5) return 0;
+  let prev = new Array(n + 1), cur = new Array(n + 1);
+  for (let j = 0; j <= n; j++) prev[j] = j;
+  for (let i = 1; i <= m; i++) {
+    cur[0] = i;
+    for (let j = 1; j <= n; j++) cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+    const tmp = prev; prev = cur; cur = tmp;
+  }
+  return 1 - prev[n] / Math.max(m, n);
+}
+
+// reply ke pesan bot dengan "// teks baru" (marker eksplisit) ATAU teks yang >=80% mirip
+// = edit pesan bot di tempat (editMessageText) + ganti konten di hist + hapus pesan reply.
+// return true kalau update ini ditelan (bukan turn chat normal).
+export async function maybeReplyEdit(env, msg, chatId) {
+  const r = msg.reply_to_message;
+  if (!r || !r.message_id) return false;
+  const text = (msg.text || "").trim();
+  if (!text) return false;
+  const target = r.message_id;
+  const marker = text.startsWith(EDIT_MARKER);
+  const hist = await getJSON(env, CHAT_HIST_KEY, []);
+  let idx = -1;
+  for (let i = hist.length - 1; i >= 0; i--) {
+    if (hist[i] && hist[i].role === "assistant" && hist[i].mid === target) { idx = i; break; }
+  }
+  if (!marker && idx < 0) return false;
+  const L = await uiLang(env);
+  const newText = marker ? text.slice(EDIT_MARKER.length).trim() : text;
+  if (marker && !newText) { await notify(env, chatId, L.edUsage); return true; }
+  if (idx < 0) { await notify(env, chatId, L.edNoCtx); return true; }
+  if (!marker) {
+    if (normForSim(text).length < EDIT_LEN_MIN) return false;
+    if (simRatio(text, String((hist[idx] && hist[idx].content) || "")) < EDIT_SIM_MIN) return false;
+  }
+  const nowS = Math.floor(Date.now() / 1000);
+  const lock = await getJSON(env, REGEN_LOCK_KEY, null);
+  if (lock && nowS - (lock.ts || 0) < 95) { await notify(env, chatId, L.rwBusy); return true; }
+  const body = mdTg(esc(newText.slice(0, 3500))) + (newText.length > 3500 ? " \u2026" : "");
+  const j = await tg(env, "editMessageText", { chat_id: chatId, message_id: target, text: body, parse_mode: "HTML" });
+  if (!j || !j.ok) {
+    const d = String((j && j.description) || "");
+    if (d.includes("message is not modified")) { await tryDeleteIds(env, chatId, [msg.message_id]); return true; }
+    await reply(env, chatId, L.edFail + esc(d || "?"));
+    return true;
+  }
+  hist[idx].content = newText;
+  await putJSON(env, CHAT_HIST_KEY, hist);
+  await tryDeleteIds(env, chatId, [msg.message_id]);
+  return true;
+}
+
+// user edit pesannya sendiri di TG = Telegram kirim update.edited_message.
+// kalau mid itu masih ada di hist sebagai entry user: potong hist ke situ,
+// hapus semua pesan TG sesudahnya (pola /rewind), lalu jalankan turn ulang
+// pakai teks baru. entry user baru NYEKAP mid yang sama = edit berulang tetep kedetek.
+export async function handleEditedMsg(env, msg) {
+  if (!msg || !msg.chat) return;
+  const chatId = msg.chat.id;
+  const owner = await env.KV.get("owner_chat");
+  const ofb = String(env.OWNER_FALLBACK || OWNER_FALLBACK);
+  if (!owner) { if (ofb && String(chatId) !== ofb) return; await env.KV.put("owner_chat", String(chatId)); }
+  else if (owner !== String(chatId)) return;
+  const mid = msg.message_id;
+  if (!mid) return;
+  const text = (msg.text || "").trim();
+  if (!text || text.startsWith("/")) return;
+  const nowS = Math.floor(Date.now() / 1000);
+  const ed = msg.edit_date || 0;
+  if (!ed || nowS - ed > EDIT_REGEN_MAX_AGE_S) return;
+  const hist = await getJSON(env, CHAT_HIST_KEY, []);
+  let ui = -1;
+  for (let i = hist.length - 1; i >= 0; i--) {
+    if (hist[i] && hist[i].role === "user" && hist[i].mid === mid) { ui = i; break; }
+  }
+  if (ui < 0) return;
+  const lock = await getJSON(env, REGEN_LOCK_KEY, null);
+  if (lock && nowS - (lock.ts || 0) < 95) return;
+  const uiTs = (typeof hist[ui].ts === "number" && hist[ui].ts) || msg.date || 0;
+  const seen = new Set([mid]);
+  const ids = [];
+  if (uiTs > 0) {
+    const tracked = await getJSON(env, NUKE_KEY, []);
+    for (const e of tracked) {
+      if (!e || typeof e.i !== "number" || seen.has(e.i)) continue;
+      const et = e.t || 0;
+      if (et <= uiTs || nowS - et >= 47 * 3600) continue;
+      seen.add(e.i); ids.push(e.i);
+    }
+  }
+  const laR = await getJSON(env, LAST_AI_KEY, null);
+  if (laR && typeof laR.mid === "number" && !seen.has(laR.mid)) {
+    const lt = laR.ts || 0;
+    if (lt > uiTs && nowS - lt < 47 * 3600) { seen.add(laR.mid); ids.push(laR.mid); }
+  }
+  for (let k = ui + 1; k < hist.length; k++) {
+    const he = hist[k];
+    if (!he || typeof he.mid !== "number" || seen.has(he.mid)) continue;
+    const et = typeof he.ts === "number" ? he.ts : nowS;
+    if (nowS - et >= 47 * 3600) continue;
+    seen.add(he.mid); ids.push(he.mid);
+  }
+  await tryDeleteIds(env, chatId, ids);
+  const trimmed = hist.slice(0, ui).slice(-CHAT_HIST_MAX);
+  await putJSON(env, CHAT_HIST_KEY, trimmed);
+  await putJSON(env, REGEN_LOCK_KEY, { ts: nowS }, { ttlMs: 90000 });
+  try {
+    await chatTurn(env, chatId, text, trimmed, mid);
+  } finally {
+    await env.KV.delete(REGEN_LOCK_KEY);
   }
 }
 

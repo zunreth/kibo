@@ -318,6 +318,8 @@ import {
   handleContinue,
   handleDelete,
   handleRewind,
+  handleEditedMsg,
+  maybeReplyEdit,
   handleReaction,
   handleReset,
   resetCharData,
@@ -377,7 +379,7 @@ async function handleUpdate(update, env) {
   if (update.callback_query) return handleCallback(env, update.callback_query);
   if (update.message_reaction) return handleReaction(env, update.message_reaction);
 
-  if (update.edited_message) return;
+  if (update.edited_message) return handleEditedMsg(env, update.edited_message);
   const msg = update.message;
   if (!msg || !msg.chat) return;
   const chatId = msg.chat.id;
@@ -391,6 +393,7 @@ async function handleUpdate(update, env) {
   }
   await stampAlive(env);
   await trackNukeMsg(env, msg.message_id);
+  if (await maybeReplyEdit(env, msg, chatId)) return;
 
   const text = (msg.text || "").trim();
   const cmd = (text.split(/\s+/)[0] || "").split("@")[0].toLowerCase();
