@@ -1,4 +1,4 @@
-import { tg, reply, getJSON, putJSON, scheduleDelete, tgErrLog, NH_FMT_ALIAS, nhDefFmt } from "./base.js";
+import { tg, reply, getJSON, putJSON, scheduleDelete, tgErrLog, NH_FMT_ALIAS, nhDefFmt, nhHost } from "./base.js";
 import { uiLang, SEP_LINE } from "./ui.js";
 import { UA, UA_BOT, DL_CACHE_PREFIX, DL_CACHE_TTL_MS, DL_POLL_MS, DL_POLL_MAX, DL_MAX_LINKS, DL_YT_FORMATS, DL_SEND_MAX, DL_URL_SEND_MAX, DL_SEND_PHOTO_MAX, FGSI_IG_URL, FGSI_KEY, KYIO_BASE, DL_DEL_MS, DELQ_KEY, DL_MENU_TTL_MS, DL_PICK_PREFIX, DL_SAV_PREFIX, DL_SAV_TTL_MS, DL_BIG_PREFIX, YT_PICK_PREFIX, YTS_MAX, NH_SAVE_PREFIX, NH_SAVES_KEY, NH_AUTODEL_MS, NH_JOB_PREFIX, NH_JOB_TTL_MS, NH_BUSY_PREFIX, NH_KEEP_PREFIX, VAULT_CHAT_KEY, FILE_INDEX_KEY } from "./consts.js";
 
@@ -1036,11 +1036,12 @@ async function nhBuilderGo(env, chatId, L, id, fmt) {
   const repo = String(env.NHBUILD_REPO || "ruqes/nhzip");
   const meta = String(env.NH_API || "").replace(/\/+$/, "");
   const cb = String(env.SELF_BASE || "").replace(/\/+$/, "") + "/nhcb";
+  const host = await nhHost(env); // v2.72.0: provider pilihan owner (auto|x0at|kappa)
   try {
     const r = await fetch("https://api.github.com/repos/" + repo + "/dispatches", {
       method: "POST",
       headers: { authorization: "Bearer " + env.GH_DISPATCH, accept: "application/vnd.github+json", "content-type": "application/json", "user-agent": "kibo" },
-      body: JSON.stringify({ event_type: "nh", client_payload: { id: String(id), fmt, meta, cb, tok } }),
+      body: JSON.stringify({ event_type: "nh", client_payload: { id: String(id), fmt, meta, cb, tok, host } }),
       signal: AbortSignal.timeout(15000)
     });
     if (!r.ok) throw new Error("github " + r.status);
@@ -1075,7 +1076,8 @@ export async function handleNhCb(request, env) {
   if (!/^https:\/\/\S+$/.test(url)) return jr(400, { ok: false, err: "url gak valid" });
   const bTitle = String(body.title || "").slice(0, 110);
   const bPages = parseInt(String(body.pages || ""), 10) || 0;
-  const cap = "<b>📦 NH " + hesc(job.id) + "</b> (" + hesc(String(body.fmt || job.fmt || "zip").slice(0, 12)) + (bPages ? " · " + hesc(String(bPages).slice(0, 6)) + " hal" : "") + ") " + (bTitle ? "— " + hesc(bTitle.slice(0, 90)) : "");
+  const bWarn = String(body.warn || "").slice(0, 90); // v2.72.0: "2 halaman gagal" / "scroll 60/124 hal"
+  const cap = "<b>📦 NH " + hesc(job.id) + "</b> (" + hesc(String(body.fmt || job.fmt || "zip").slice(0, 12)) + (bPages ? " · " + hesc(String(bPages).slice(0, 6)) + " hal" : "") + ")" + (bTitle ? " — " + hesc(bTitle.slice(0, 90)) : "") + (bWarn ? "\n<i>" + hesc(bWarn.slice(0, 80)) + "</i>" : "");
   // v2.71.0: hasil build = pesan auto-hapus + tombol 💾 → kalau gak ditekan, ilang sendiri (NH_AUTODEL_MS)
   const stok = rndTok();
   const kb = { inline_keyboard: [[{ text: L.nhSaveBtn, callback_data: "nhsave:" + stok }, { text: L.nhDlBtn, url }]] };

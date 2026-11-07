@@ -159,6 +159,7 @@ export const NH_JOB_TTL_MS = 20 * 60 * 1000;
 export const NH_BUSY_PREFIX = "nh_busy:"; // v2.70.5: anti-dobel — id+fmt sama per chat lagi jalan → tolak (TTL sama dgn job)
 export const NH_DEF_KEY = "nh_def";     // v2.71.0: format default /nh + link auto-detect (album|zip|pdf|scroll)
 export const NH_KEEP_PREFIX = "nhkeep:";  // v2.71.0: penanda "jangan hapus" — diisi pas tombol 💾 ditekan, dibaca delQsweep
+export const NH_HOST_KEY = "nh_host";   // v2.72.0: provider upload builder (auto|x0at|kappa)
 export const YTS_MAX = 6; // v2.68.8: jumlah hasil /yts
 export const GAME_LYRIC_KEY = "glyric:";
 export const LYRIC_PTS = 8;
@@ -232,7 +233,7 @@ export const CHAIN_BONUS = 50;
 export const CHAIN_SHIELD = 1; // v2.68.14: hadiah tamat arc = +1 shield (bukan hangus/deadline; benefit permanen jaga streak)
 export const CHAIN_GEN_STALE_MS = 180000;
 export const SYS_CHAIN = "You generate a tiny 5-day quest arc for the user's Telegram bot companion. Reply with EXACTLY one line, pipe-separated, NO extra text, no markdown, no quotes: ArcName | step1 | step2 | step3 | step4 | step5. ArcName = a catchy title (max 6 words) for a fun, imaginative mini-adventure rooted in everyday life — habits, fitness, productivity, learning, a cozy hobby, or a small personal project. Frame it like a light RPG challenge so it feels exciting, but keep it believable: the 5 steps are a connected journey (day 1 an easy warm-up, days 2-4 climbing the arc, day 5 a satisfying finish). Each step = a short vivid label (max 8 words) the user can picture themselves doing. Make it fun, punchy, and a little playful — but NOT absurd, cartoonish, or slapstick (no talking animals, no stealing, no magical hijinks). Each step builds on the previous.";
-export const BOT_VER = "2.71.0";
+export const BOT_VER = "2.72.0";
 
 // edit-fitur v2.63.0
 export const EDIT_MARKER = "//";

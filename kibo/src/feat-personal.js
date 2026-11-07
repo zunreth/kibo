@@ -87,6 +87,8 @@ import {
   nukeGone,
   nukeSleep,
   nhDefFmt,
+  nhHost,
+  NH_HOSTS,
 } from './base.js';
 import { d1Stats, shadowInfo } from './store-d1.js';
 import {
@@ -978,10 +980,23 @@ export async function renderCfgView(env) {
       [{ text: L.cfgLang, callback_data: "nav:lang" }, { text: L.cfgUi, callback_data: "nav:uilang" }],
       [{ text: ttsOn ? L.cfgTtsOn : L.cfgTtsOff, callback_data: "ttsg" }],
       [{ text: adlOn ? L.cfgAutoOn : L.cfgAutoOff, callback_data: "autodlg" }],
-      [{ text: L.cfgNhDef(L.nhDefLbl(await nhDefFmt(env))), callback_data: "nav:nhdef" }],
+      [{ text: L.cfgNhSet(L.nhDefLbl(await nhDefFmt(env)), L.nhProvLblShort(await nhHost(env))), callback_data: "nav:nhset" }],
       [{ text: L.cfgDiveBtn(dvShort), callback_data: "nav:divecfg" }],
       [{ text: L.cfgDbgBtn(dbgOn), callback_data: "nav:dbg" }],
       [{ text: L.home, callback_data: "menu" }]
+    ] }
+  };
+}
+
+// v2.72.0: hub NH — dua submenu (format + provider)
+export async function renderNhSetHub(env) {
+  const L = await uiLang(env);
+  return {
+    text: L.nhSetTitle(L.nhDefLbl(await nhDefFmt(env)), L.nhProvLbl(await nhHost(env))) + UI_SEP + L.nhSetNote,
+    markup: { inline_keyboard: [
+      [{ text: L.nhSetFmt, callback_data: "nav:nhdef" }],
+      [{ text: L.nhSetProv, callback_data: "nav:nhprov" }],
+      [{ text: L.back, callback_data: "nav:cfg" }, { text: L.home, callback_data: "menu" }]
     ] }
   };
 }
@@ -993,7 +1008,19 @@ export async function renderNhDefView(env) {
     text: L.nhDefTitle(L.nhDefLbl(cur)) + UI_SEP + L.nhDefNote,
     markup: { inline_keyboard: [
       ...["album", "zip", "pdf", "scroll"].map(k => [{ text: (k === cur ? "\u2705 " : "") + L.nhDefLbl(k), callback_data: "nhdef:" + k }]),
-      [{ text: L.back, callback_data: "nav:cfg" }, { text: L.home, callback_data: "menu" }]
+      [{ text: L.back, callback_data: "nav:nhset" }, { text: L.home, callback_data: "menu" }]
+    ] }
+  };
+}
+
+export async function renderNhProvView(env) {
+  const L = await uiLang(env);
+  const cur = await nhHost(env);
+  return {
+    text: L.nhProvTitle(L.nhProvLbl(cur)) + UI_SEP + L.nhProvNote,
+    markup: { inline_keyboard: [
+      ...NH_HOSTS.map(k => [{ text: (k === cur ? "\u2705 " : "") + L.nhProvLbl(k), callback_data: "nhprov:" + k }]),
+      [{ text: L.back, callback_data: "nav:nhset" }, { text: L.home, callback_data: "menu" }]
     ] }
   };
 }

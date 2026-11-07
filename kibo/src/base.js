@@ -48,6 +48,7 @@ import {
   VAULT_REN_KEY,
   VAULT_OP_KEY,
   NH_DEF_KEY,
+  NH_HOST_KEY,
   FILE_MAX,
   SNAP_MAX,
   ABORT_KEY,
@@ -133,6 +134,13 @@ export async function nhDefFmt(env) {
   let v = "";
   try { v = String((await env.KV.get(NH_DEF_KEY)) || "").trim().toLowerCase(); } catch (_) {}
   return NH_FMT_ALIAS[v] || "album";
+}
+// v2.72.0: provider upload builder — auto (x0.at → kappa) / x0at / kappa
+export const NH_HOSTS = ["auto", "x0at", "kappa"];
+export async function nhHost(env) {
+  let v = "";
+  try { v = String((await env.KV.get(NH_HOST_KEY)) || "").trim().toLowerCase(); } catch (_) {}
+  return NH_HOSTS.includes(v) ? v : "auto";
 }
 export function scheduleDelete(env, chatId, mid, ms, keepKey) {
   if (ms === undefined) ms = parseInt(env.NOTIFY_MS || "", 10) || 15000;

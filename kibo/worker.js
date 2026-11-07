@@ -66,6 +66,7 @@ import {
   AUTO_DL_KEY,
   DIVE_DEF_KEY,
   NH_DEF_KEY,
+  NH_HOST_KEY,
 } from './src/consts.js';
 import {
   esc,
@@ -261,7 +262,9 @@ import {
   renderLenView,
   renderLangView,
   renderCfgView,
+  renderNhSetHub,
   renderNhDefView,
+  renderNhProvView,
   renderDiveCfg,
   handleModel,
   handleLen,
@@ -713,7 +716,9 @@ async function handleCallback(env, cb) {
     else if (arg === "uilang") view = await renderUiLangView(env);
     else if (arg === "j") view = { text: L.jMsg, markup: { inline_keyboard: [[{ text: L.bDig, callback_data: "dig" }], [{ text: L.home, callback_data: "menu" }]] } };
     else if (arg === "cfg") view = await renderCfgView(env);
+    else if (arg === "nhset") view = await renderNhSetHub(env);
     else if (arg === "nhdef") view = await renderNhDefView(env);
+    else if (arg === "nhprov") view = await renderNhProvView(env);
     else if (arg === "dbg") view = await renderDebugView(env);
     else if (arg === "divecfg") view = await renderDiveCfg(env);
     else if (arg === "vault") view = await renderVault(env, L);
@@ -745,6 +750,12 @@ async function handleCallback(env, cb) {
     await env.KV.put(NH_DEF_KEY, k);
     await tg(env, "answerCallbackQuery", { callback_query_id: cb.id, text: L.nhDefPop(L.nhDefLbl(k)) });
     await edit(await renderNhDefView(env));
+  } else if (act === "nhprov" && chatId) {
+    // v2.72.0: provider upload builder (auto|x0at|kappa) — dikirim ke GHA di payload dispatch
+    const k = ["auto", "x0at", "kappa"].includes(arg) ? arg : "auto";
+    await env.KV.put(NH_HOST_KEY, k);
+    await tg(env, "answerCallbackQuery", { callback_query_id: cb.id, text: L.nhProvPop(L.nhProvLbl(k)) });
+    await edit(await renderNhProvView(env));
   } else if (act === "dvset" && chatId) {
     const lbl = { chill: L.cfgDiveChill, normal: L.cfgDiveNormal, deep: L.cfgDiveDeep }[arg] || L.cfgDiveAskLbl;
     if (arg === "ask") await env.KV.delete(DIVE_DEF_KEY);
