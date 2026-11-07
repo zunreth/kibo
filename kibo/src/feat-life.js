@@ -27,7 +27,7 @@ const dowWIB = sec => new Date(((sec || nowS()) + WIB) * 1000).getUTCDay();
 const wkOf = sec => { const t = (sec || nowS()) + WIB; const d = new Date(t * 1000); const mon = new Date((t - ((d.getUTCDay() + 6) % 7) * 86400) * 1000); const p = n => String(n).padStart(2, "0"); return mon.getUTCFullYear() + "-" + p(mon.getUTCMonth() + 1) + "-" + p(mon.getUTCDate()); };
 const rp = n => "Rp" + String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ".");
 
-export async function lifeMsg(env, event, hint) {
+async function lifeMsg(env, event, hint) {
   try { return await remindMsg(env, 0, event, 0, "life:" + hint); } catch (_) { return ""; }
 }
 const reactTail = (env, chatId, ai) => ai ? reply(env, chatId, "\u{1F4AC} " + mdTg(esc(ai))) : Promise.resolve();
@@ -80,7 +80,7 @@ export async function handleFocus(env, msg, chatId) {
   await reply(env, chatId, L.fSet(n));
 }
 
-export async function focusCron(env, nowSec) {
+async function focusCron(env, nowSec) {
   const st = await getJSON(env, FOCUS_KEY, null);
   if (!st || st.settled || nowSec <= st.start + st.dur + FOCUS_GRACE) return;
   await putJSON(env, FOCUS_KEY, Object.assign({}, st, { settled: true }));
@@ -132,7 +132,7 @@ export async function handleSleep(env, msg, chatId) {
   return reply(env, chatId, L.sHead + "\n" + (gn ? L.sOpen(fmtWIB(gn, L)) + "\n" : "") + (rows ? rows + "\n" + L.sAvg(avg, log.length) : L.sEmpty) + "\n" + L.sHow);
 }
 
-export async function habitsResetLazy(env, arr, today, yesterday, wkNow) {
+async function habitsResetLazy(env, arr, today, yesterday, wkNow) {
   let ch = false;
   const wk = wkNow || wkOf();
   for (const h of arr) {
@@ -245,7 +245,7 @@ async function editHabitView(env, chatId, mid) {
   try { const v = await habitView(env); await tg(env, "editMessageText", { chat_id: chatId, message_id: mid, text: v.text, parse_mode: "HTML", reply_markup: v.markup }); } catch (_) {}
 }
 
-export function parseAmt(tok) {
+function parseAmt(tok) {
   const m = String(tok || "").match(/^(\d+(?:[.,]\d+)?)\s*(k|rb)?$/i);
   if (!m) return null;
   const n = parseFloat(m[1].replace(",", ".")) * (m[2] ? 1000 : 1);
@@ -319,7 +319,7 @@ export async function handleCapsule(env, msg, chatId) {
   return reply(env, chatId, L.cOk(fmtWIB(due, L)));
 }
 
-export async function capsuleCron(env, nowSec) {
+async function capsuleCron(env, nowSec) {
   const arr = (await getJSON(env, CAPSULE_KEY, [])).filter(c => c && c.text);
   let changed = false;
   for (const c of arr) {
@@ -338,12 +338,15 @@ export async function capsuleCron(env, nowSec) {
   }
 }
 
+import { chainCron } from './feat-chain.js';
+
 export async function lifeCron(env, nowSec) {
   await focusCron(env, nowSec).catch(() => {});
   await capsuleCron(env, nowSec).catch(() => {});
   await countdownCron(env, nowSec).catch(() => {});
   await resurfaceCron(env, nowSec).catch(() => {});
   await alarmCron(env, nowSec).catch(() => {});
+  await chainCron(env, nowSec).catch(() => {});
 }
 
 const p2 = n => String(n).padStart(2, "0");
@@ -619,7 +622,7 @@ async function planNudgeMaybe(env, plan) {
   await putJSON(env, HABIT_PLAN_KEY, plan);
   await lifeNote(env, "the habit plan '" + (plan.topic || "custom") + "' is due for its weekly review — ask how the week went and point them to /habit plan review");
 }
-export async function handleHabitPlan(env, msg, chatId) {
+async function handleHabitPlan(env, msg, chatId) {
   const L = await uiLang(env);
   const raw = (msg.text || "").replace(/^\/\S+\s*/, "").trim();
   const arg = raw.replace(/^plan\s*/i, "").trim();
@@ -647,7 +650,7 @@ export async function handleHabitPlan(env, msg, chatId) {
   const v = planConfirmView(p, L);
   return tg(env, "sendMessage", { chat_id: chatId, text: v.text, parse_mode: "HTML", reply_markup: v.markup });
 }
-export async function habitPlanReview(env, chatId, mid) {
+async function habitPlanReview(env, chatId, mid) {
   const L = await uiLang(env);
   const plan = await getJSON(env, HABIT_PLAN_KEY, null);
   if (!plan) return reply(env, chatId, L.hpNone);
@@ -681,11 +684,11 @@ export async function handleHplanCb(env, chatId, mid, arg) {
   if (op === "add" || op === "all") {
     const arr = (await getJSON(env, HABITS_KEY, [])).filter(h => h && h.name);
     const picks = op === "all" ? plan.habits.map((_, i) => i) : [parseInt(parts[1], 10)];
-    let added = 0, firstName = "";
+    let added = 0, firstName = "", full = false;
     for (const i of picks) {
       const h = plan.habits[i];
       if (!h || h.hid) continue;
-      if (arr.length >= HABIT_MAX) return L.hFull(HABIT_MAX);
+      if (arr.length >= HABIT_MAX) { full = true; continue; }
       if (arr.some(x => String(x.name).toLowerCase() === h.name.toLowerCase())) { h.hid = -1; continue; }
       const id = (arr.reduce((m, x) => Math.max(m, x.id || 0), 0) + 1);
       arr.push(Object.assign({ id, name: h.name, streak: 0, last_done: "" }, { tgt: h.target, wk: wkOf(), wkc: 0 }));
@@ -698,7 +701,7 @@ export async function handleHplanCb(env, chatId, mid, arg) {
       await putJSON(env, HABIT_PLAN_KEY, plan);
     }
     await editPlanView(env, chatId, mid, plan.applied ? planAppliedView(plan, L, arr) : planConfirmView(plan, L));
-    return added ? L.hpAdded(esc(firstName)) : "";
+    return full ? L.hFull(HABIT_MAX) : added ? L.hpAdded(esc(firstName)) : "";
   }
   if (op === "rok") {
     const rv = plan.rv;

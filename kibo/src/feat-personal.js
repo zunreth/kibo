@@ -87,7 +87,7 @@ import {
   nukeGone,
   nukeSleep,
 } from './base.js';
-import { d1Stats } from './store-d1.js';
+import { d1Stats, shadowInfo } from './store-d1.js';
 import {
   STAMP_LAST,
   stampAlive,
@@ -120,6 +120,7 @@ import {
   fmtWIB,
   nowWIB,
 } from './ui.js';
+import { getDebug, dbgLog } from './feat-debug.js';
 import {
   TOOLS_AGENT,
   ddgHost,
@@ -299,13 +300,14 @@ async function* sseText(body, pick) {
 export async function* chatStream(env, messages, maxTokens, timeoutMs = 60000) {
   const cfg = await aiConf(env);
   if (cfg.base && cfg.key && cfg.model) {
+    dbgLog(env, "ai", "model=" + cfg.model + " @" + String(cfg.base).slice(0, 28));
     const r = await aiFetchRetry(cfg.base.replace(/\/+$/, "") + "/chat/completions", {
       method: "POST",
       headers: { "content-type": "application/json", "authorization": "Bearer " + cfg.key },
       signal: AbortSignal.timeout(timeoutMs),
       body: JSON.stringify({ model: cfg.model, messages: messages, max_tokens: maxTokens, stream: true })
     });
-    if (!r.ok || !r.body) throw new Error("AI provider HTTP " + r.status);
+    if (!r.ok || !r.body) { dbgLog(env, "ai", "ERR model=" + cfg.model + " HTTP " + r.status); throw new Error("AI provider HTTP " + r.status); }
     const cfilt = makeThinkFilter();
     const qf2 = makeQuoteFilter();
     for await (const tk of sseText(r.body, j => (j.choices && j.choices[0] && j.choices[0].delta && j.choices[0].delta.content) || "")) {
@@ -327,7 +329,7 @@ export async function* chatFast(env, messages, maxTokens) {
   yield* sseText(s, j => j.response || "");
 }
 
-export const REL_STAGES_EN = ["distant", "wary", "familiar", "warm", "bonded"];
+const REL_STAGES_EN = ["distant", "wary", "familiar", "warm", "bonded"];
 export function relStage(aff) { return REL_STAGES_EN[Math.min(4, Math.max(0, Math.floor(aff / 20)))]; }
 export async function relGet(env, id) { return getJSON(env, REL_PREFIX + id, null); }
 export async function relPurge(env, id) { await env.KV.delete(REL_PREFIX + id); }
@@ -594,7 +596,7 @@ export async function delMemory(env, msg, chatId) {
   await notify(env, chatId, L.memForgotten(id));
 }
 
-export function sysInfoOf(env) {
+function sysInfoOf(env) {
   return {
     acct: env.CF_ACCT || "",
     ns: env.CF_KV_NS || "",
@@ -687,7 +689,14 @@ export async function sysView(env) {
     kvUsage("\u{1F4D6}", "Reads", pq ? pq.r : null, KV_LIMITS.r, false, L) +
     (pq ? "" : "\n" + L.sysEstNote);
   const d1s = await d1Stats(env);
-  const d1Sec = !d1s ? "" : (d1s.ok && d1s.rows !== null ? L.sysD1(d1s.ms, d1s.rows, d1s.ttl, d1s.wr) : L.sysD1Fail);
+  let d1Sec = !d1s ? "" : (d1s.ok && d1s.rows !== null ? L.sysD1(d1s.ms, d1s.rows, d1s.ttl, d1s.wr) : L.sysD1Fail);
+  const sh = d1s && d1s.sh ? await shadowInfo(env) : null;
+  if (d1s && sh) {
+    const age = fmtDur(sh.ageMs);
+    d1Sec += "\n" + (sh.ageMs > 86400000 * 2 ? L.sysD1ShDrift(age) : L.sysD1Sh(age, sh.n));
+  } else if (d1s && d1s.ok) {
+    d1Sec += "\n" + L.sysD1ShNone;
+  }
   const partnerSec = (fvflag ? "\u{1F7E0} <b>PARTNER KV \u00b7 " + L.sysFvActive + "</b>" : "\u{1F7E1} <b>PARTNER KV \u00b7 " + L.sysStandby + "</b>") + "\n" +
     L.sysAcct(maskId(FV_ACCOUNT, 4)) + "\n" +
     L.sysNs(maskId(FV_NS, 4)) + "\n" +
@@ -824,7 +833,7 @@ export async function renderUiLangView(env) {
   };
 }
 
-export function helpSections(L) {
+function helpSections(L) {
   const secs = [];
   let cur = null;
   for (const line of L.helpArr) {
@@ -849,7 +858,7 @@ export function renderHelpCat(L, i) {
   return { text: s.body.join("\n"), markup: { inline_keyboard: [[{ text: L.back, callback_data: "helpback" }], [{ text: L.home, callback_data: "menu" }]] } };
 }
 
-export async function obWelcome(env, chatId, L) {
+async function obWelcome(env, chatId, L) {
   await tg(env, "sendMessage", { chat_id: chatId, text: L.obHead + L.obBody, parse_mode: "HTML", reply_markup: { inline_keyboard: [
     [{ text: L.bLangEn, callback_data: "ob:lang:en" }, { text: L.bLangId, callback_data: "ob:lang:id" }]
   ] } });
@@ -960,6 +969,7 @@ export async function renderCfgView(env) {
   const dvCur = (await env.KV.get(DIVE_DEF_KEY)) || "";
   const dvMode = DIVE_MODES.find(m => m.k === dvCur);
   const dvShort = dvMode ? dvMode.name : L.cfgDiveAskLbl;
+  const dbgOn = await getDebug(env);
   return {
     text: L.cfgTitle + UI_SEP + L.cfgLenCur(lenCur) + L.cfgLangCur(esc(langCur)) + L.cfgUiCur(uiCur) + L.cfgAutoCur(adlOn ? "ON" : "OFF"),
     markup: { inline_keyboard: [
@@ -968,6 +978,7 @@ export async function renderCfgView(env) {
       [{ text: ttsOn ? L.cfgTtsOn : L.cfgTtsOff, callback_data: "ttsg" }],
       [{ text: adlOn ? L.cfgAutoOn : L.cfgAutoOff, callback_data: "autodlg" }],
       [{ text: L.cfgDiveBtn(dvShort), callback_data: "nav:divecfg" }],
+      [{ text: L.cfgDbgBtn(dbgOn), callback_data: "nav:dbg" }],
       [{ text: L.home, callback_data: "menu" }]
     ] }
   };

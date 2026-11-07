@@ -12,7 +12,7 @@ import { stripThink, langLine } from "./ai.js";
 
 const stageOf = (L, aff) => L.relStages[Math.min(4, Math.floor(aff / 20))];
 
-export async function aistData(env, card) {
+async function aistData(env, card) {
   const id = card.id;
   const [rel, mems, sum, chaps, saves, ckpt, knobs, plot, ooc, sc, rec, fsRaw, msgRaw] = await Promise.all([
     getJSON(env, REL_PREFIX + id, null),

@@ -60,6 +60,7 @@ import {
   setLiveCtx,
   setLastCf,
 } from './consts.js';
+import { dbgLog } from './feat-debug.js';
 
 export function esc(s) {
   return String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -72,6 +73,9 @@ export function mdTg(s) {
     .replace(/\*([^*\n]+?)\*/g, "<i>$1</i>");
 }
 
+// NF-251019-4: shared env-knobbed upstream timeout (user-facing interactive fetches)
+export const upstreamTmo = env => AbortSignal.timeout(parseInt((env && env.UPSTREAM_TIMEOUT_MS) || "", 10) || 15000);
+
 export async function getJSON(env, k, d) {
   const v = await env.KV.get(k);
   if (!v) return d;
@@ -83,16 +87,28 @@ export async function putJSON(env, k, v, opts) {
 
 export async function tg(env, method, payload) {
   if (!env.TG_TOKEN) throw new Error("TG_TOKEN not set");
-  const r = await fetch("https://api.telegram.org/bot" + env.TG_TOKEN + "/" + method, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(payload)
-  });
-  const j = await r.json().catch(() => null);
-  if (!j || !j.ok) console.error("tg fail:", method, JSON.stringify((j && j.description) || "").slice(0, 200));
+  let j = null;
+  try {
+    const r = await fetch("https://api.telegram.org/bot" + env.TG_TOKEN + "/" + method, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    j = await r.json().catch(() => null);
+  } catch (e) {
+    dbgLog(env, "tg", method + " THREW " + String((e && e.message) || e).slice(0, 120));
+    throw e; // propagate ke caller persis kayak dulu
+  }
+  if (!j || !j.ok) tgErrLog(env, method, j);
   if (j && j.ok && j.result && typeof j.result.message_id === "number") await trackNukeMsg(env, j.result.message_id);
   if (env.__probe && j && j.ok) env.__probe.push({ mid: (j.result && j.result.message_id) || null, method: method, chat: payload.chat_id, text: String(payload.text || payload.caption || "").slice(0, 400) });
   return j;
+}
+
+// B11: delivery fail TG = catet ke ring debug juga (keliatan di /debug log), bukan cuman console
+export function tgErrLog(env, method, j) {
+  console.error("tg fail:", method, JSON.stringify((j && j.description) || "").slice(0, 200));
+  dbgLog(env, "tg", method + " fail " + String((j && j.description) || (j ? "?" : "no-json")).slice(0, 140));
 }
 
 export async function reply(env, chatId, text) {

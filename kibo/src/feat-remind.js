@@ -249,6 +249,8 @@ export async function questScan(env, chatId, text) {
   return { stripped };
 }
 
+import { chainStep } from './feat-chain.js';
+
 export async function questMark(env, chatId, act) {
   const nowSec = Math.floor(Date.now() / 1000);
   const day = questDay(nowSec);
@@ -267,6 +269,7 @@ export async function questMark(env, chatId, act) {
   } else q.skipped = true;
   await putJSON(env, "quest", q);
   if (act === "done") await addPts(env, 10 + q.loot.amt);
+  if (act === "done") { try { await chainStep(env, chatId); } catch (_) {} }
   if (q.mid) {
     if (act === "done") { try { await tg(env, "setMessageReaction", { chat_id: chatId, message_id: q.mid, reaction: [{ type: "emoji", emoji: "\u{1F4AF}" }] }); } catch (_) {} }
     try { await tg(env, "editMessageReplyMarkup", { chat_id: chatId, message_id: q.mid, reply_markup: { inline_keyboard: [] } }); } catch (_) {}
@@ -317,6 +320,7 @@ export async function handleSideqCb(env, chatId, mid, arg) {
   }
   if (e.mid) { try { await tg(env, "deleteMessage", { chat_id: chatId, message_id: e.mid }); } catch (_) {} }
   await putJSON(env, "squest", s);
+  if (act === "done") { try { await chainStep(env, chatId); } catch (_) {} }
   return act === "done"
     ? L.sqDone(q ? q.points : 0, lvUp)
     : L.sqSkip;
@@ -338,6 +342,7 @@ export async function sideQuestResolve(env, chatId, act) {
   } else e.skipped = true;
   if (e.mid) { try { await tg(env, "deleteMessage", { chat_id: chatId, message_id: e.mid }); } catch (_) {} }
   await putJSON(env, "squest", s);
+  if (act === "done") { try { await chainStep(env, chatId); } catch (_) {} }
   return true;
 }
 
@@ -419,7 +424,7 @@ export function parseRec(kindName, hh, mm, nowSec) {
   return null;
 }
 
-export function recLabelOf(r, L) {
+function recLabelOf(r, L) {
   if (!r || !r.rec) return L.recLabel;
   if (r.rec.kind === "daily") return L.recEvery;
   if (r.rec.kind === "weekly") return L.recDay(r.rec.dow);
@@ -722,6 +727,7 @@ export async function handleQuestCb(env, chatId, mid, arg) {
   }
   if (reacted) await putJSON(env, "quest", q);
   if (q.done) await addPts(env, 10 + q.loot.amt);
+  if (q.done) { try { await chainStep(env, chatId); } catch (_) {} } // tombol ✓/Done harian = majuin arc quest (mirror questMark)
 
   if (mid && reacted) {
     if (q.done) { try { await tg(env, "setMessageReaction", { chat_id: chatId, message_id: mid, reaction: [{ type: "emoji", emoji: "\u{1F4AF}" }] }); } catch (_) {} }
@@ -841,8 +847,21 @@ export async function runCron(env) {
   const wib = new Date((nowSec + WIB) * 1000);
   const qDay = questDay(nowSec);
   if (wib.getUTCHours() === 7 && wib.getUTCMinutes() < 5 && (await getJSON(env, "digest_day", "")) !== qDay) { await putJSON(env, "digest_day", qDay); await sendDigest(env, null, true); }
-  if (wib.getUTCHours() === 9 && wib.getUTCMinutes() < 5) await fireQuest(env, nowSec);
+  const pingSlot = questPingSlot(qDay);
+  const wibMin = wib.getUTCHours() * 60 + wib.getUTCMinutes();
+  if (wibMin >= pingSlot && wibMin < pingSlot + 5) await fireQuest(env, nowSec);
   await lifeCron(env, nowSec);
+}
+
+// Quest ping = slot acak per-hari (Duolingo-style nudge), 10:00-19:59 WIB — gak nempel good morning pagi.
+// Hash hari -> menit: deterministik dalam hari yang sama (cron tiap menit butuh keputusan stabil), beda tiap hari.
+// fireQuest sendiri tetep gak nge-push kalau quest udah delivered/done/skipped hari itu.
+const QPING_LO = 10 * 60, QPING_SPAN = 10 * 60;
+export function questPingSlot(dayStr) {
+  let h = 2166136261;
+  for (const c of String(dayStr)) { h ^= c.charCodeAt(0); h = Math.imul(h, 16777619); }
+  h ^= h >>> 15; h = Math.imul(h, 2246822519); h ^= h >>> 13; // murmur3 finalizer: biar tanggal berurutan gak ngeluarin slot yang cuma geser 1-2 menit
+  return QPING_LO + (h >>> 0) % QPING_SPAN;
 }
 
 export function photoqTaskIdx(dayStr) {
@@ -899,6 +918,7 @@ export async function photoqVerify(env, msg, chatId) {
   await addPts(env, PHOTOQ_PTS);
   const w = await getJSON(env, "quest", {});
   await reply(env, chatId, L.pqPass(PHOTOQ_PTS, w.points || 0));
+  try { await chainStep(env, chatId); } catch (_) {}
   let ai = "";
   try { ai = await remindMsg(env, 0, "photo quest PASS: the user's photo matched today's challenge (" + task + "). Vision verdict: " + t.slice(0, 100), 0, "life:react in ONE short in-character line to the user passing today's photo challenge - a little impressed, no system talk"); } catch (_) {}
   if (ai) await reply(env, chatId, "\u{1F4AC} " + mdTg(esc(ai)));

@@ -82,6 +82,7 @@ import {
   nukeGone,
   nukeSleep,
 } from './base.js';
+import { tgErrLog } from './base.js';
 import {
   STAMP_LAST,
   stampAlive,
@@ -183,7 +184,9 @@ export async function vaultTg(env, method, payload) {
     headers: { "content-type": "application/json" },
     body: JSON.stringify(payload)
   });
-  return r.json().catch(() => null);
+  const j = await r.json().catch(() => null);
+  if (!j || !j.ok) tgErrLog(env, method, j);
+  return j;
 }
 
 export async function vaultCopyToChannel(env, v, fromChatId, messageId, caption) {
@@ -399,6 +402,7 @@ export async function vaultBackup(env, chatId, silent) {
     form.append("document", new Blob([payload], { type: "application/json" }), "kibo-snapshot-" + day + ".json");
     const r = await fetch("https://api.telegram.org/bot" + env.TG_TOKEN + "/sendDocument", { method: "POST", body: form });
     const j = await r.json().catch(() => null);
+    if (!j || !j.ok) tgErrLog(env, "sendDocument", j);
     if (!j || !j.ok || !j.result || !j.result.document) {
       if (!silent && chatId) await reply(env, chatId, (await uiLang(env)).vaultBackupFail);
       return false;

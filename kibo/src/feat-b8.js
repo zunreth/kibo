@@ -4,7 +4,7 @@ import { READLIST_KEY, READLIST_MAX, OTD_KEY, SHORT_KEY, SHORT_COUNT_KEY, SHORT_
 
 import { chatStream } from './feat-personal.js';
 import { stripThink, langLine } from './ai.js';
-import { mdTg } from './base.js';
+import { mdTg, upstreamTmo } from './base.js';
 
 async function editView(env, chatId, mid, view) {
   if (mid) {
@@ -71,7 +71,7 @@ async function otdFetch(env) {
   const key = OTD_KEY + mm + "-" + dd;
   const hit = await getJSON(env, key, null);
   if (hit && hit.exp > Date.now()) return hit.v;
-  const r = await fetch(OTD_API + mm + "/" + dd, { headers: { "user-agent": "kibo-otd/1.0 (reading-list; no auth)" } });
+  const r = await fetch(OTD_API + mm + "/" + dd, { headers: { "user-agent": "kibo-otd/1.0 (reading-list; no auth)" }, signal: upstreamTmo(env) });
   if (!r.ok) throw new Error("OTD HTTP " + r.status);
   const j = await r.json();
   const sel = (j.selected || []).slice(0, 5);
@@ -125,7 +125,7 @@ export async function shortResolve(env, code) {
 async function lfmGet(env, method, extra) {
   const user = (await env.KV.get(LFM_USER_KEY)) || env.LASTFM_USER || LFM_USER_DEFAULT;
   const url = "https://ws.audioscrobbler.com/2.0/?method=" + method + "&format=json&user=" + encodeURIComponent(user) + "&api_key=" + env.LASTFM_KEY + (extra || "");
-  const r = await fetch(url, { headers: { "user-agent": UA } });
+  const r = await fetch(url, { headers: { "user-agent": UA }, signal: upstreamTmo(env) });
   if (!r.ok) throw new Error("LFM HTTP " + r.status);
   return r.json();
 }
@@ -223,4 +223,29 @@ export async function pasteAdd(env, chatId, raw) {
 export async function pasteGet(env, id) {
   const hit = await getJSON(env, PASTE_KEY + String(id || "").trim(), null);
   return hit && hit.t ? hit.t : null;
+}
+
+// /hn — HN front page via algolia (1 fetch keyless, CF-egress verified 28 Okt) — cache 30 mnt
+const HN_KEY = "hn_top";
+const HN_TTL_MS = 30 * 60 * 1000;
+export async function handleHn(env, chatId, arg) {
+  const L = await uiLang(env);
+  let n = parseInt(String(arg || "").trim(), 10);
+  if (!Number.isFinite(n) || n < 1) n = 10;
+  n = Math.min(n, 15);
+  let hits = [], fail = false;
+  try {
+    const c = await getJSON(env, HN_KEY, null);
+    if (c && Array.isArray(c.hits) && c.hits.length) hits = c.hits;
+    if (!hits.length) {
+      const r = await fetch("https://hn.algolia.com/api/v1/search?tags=front_page&hitsPerPage=20", { headers: { "user-agent": UA }, signal: upstreamTmo(env) });
+      if (!r.ok) throw new Error("HN HTTP " + r.status);
+      const j = await r.json().catch(() => null);
+      hits = ((j && j.hits) || []).filter(h => h && h.title).slice(0, 15).map(h => ({ t: String(h.title), u: h.url || ("https://news.ycombinator.com/item?id=" + h.objectID), p: h.points || 0, c: h.num_comments || 0 }));
+      if (hits.length) { try { await putJSON(env, HN_KEY, { hits }, env.DB ? { ttlMs: HN_TTL_MS } : undefined); } catch (_) {} }
+    }
+  } catch (_) { fail = true; }
+  if (!hits.length) return reply(env, chatId, L.hnFail);
+  const lines = hits.slice(0, n).map((h, i) => (i + 1) + ". <a href=\"" + esc(h.u) + "\">" + esc(h.t) + "</a> · " + h.p + " pts · " + h.c + " 💬");
+  return reply(env, chatId, L.hnCard(lines.join("\n")));
 }

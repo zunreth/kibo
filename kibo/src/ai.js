@@ -79,6 +79,8 @@ import {
   nukeGone,
   nukeSleep,
 } from './base.js';
+import { tgErrLog } from './base.js';
+import { dbgLog } from './feat-debug.js';
 import {
   STAMP_LAST,
   stampAlive,
@@ -278,6 +280,7 @@ export async function webSearch(env, q) {
 }
 
 export async function execTool(env, name, argsJson, chatId) {
+  dbgLog(env, "tool", name + " " + String(argsJson || "").slice(0, 140));
   let a = {};
   try { a = JSON.parse(argsJson || "{}"); } catch (_) {}
   let q = a.query || a.q || a.keywords || "";
@@ -489,6 +492,7 @@ export async function* agentChat(env, msgs, chatId, extSig, turnTs, startMode, n
   const L = await uiLang(env);
   const cfg = await aiConf(env);
   const base = cfg.base.replace(/\/+$/, "");
+  dbgLog(env, "ai", "model=" + cfg.model + " @" + base.slice(0, 28) + " tools=" + (noTools ? "off" : "on"));
   let yielded = 0;
   let lastAb = Date.now();
   const seenQ = new Set();
@@ -502,7 +506,7 @@ export async function* agentChat(env, msgs, chatId, extSig, turnTs, startMode, n
       signal: extSig && typeof AbortSignal.any === "function" ? AbortSignal.any([extSig, AbortSignal.timeout(80000)]) : AbortSignal.timeout(80000),
       body: JSON.stringify({ model: cfg.model, messages: msgs, max_tokens: step > 0 ? 2500 : 1200, stream: true, tools: noTools ? undefined : TOOLS_AGENT })
     });
-    if (!r.ok || !r.body) throw new Error("AI provider HTTP " + r.status);
+    if (!r.ok || !r.body) { dbgLog(env, "ai", "ERR model=" + cfg.model + " HTTP " + r.status + " step=" + step); throw new Error("AI provider HTTP " + r.status); }
     let finish = "";
     let content = "";
     let think = 0;
@@ -770,7 +774,7 @@ export async function tgUpload(env, chatId, buf) {
     r = await fetch("https://api.telegram.org/bot" + env.TG_TOKEN + "/sendAudio", { method: "POST", body: mk("audio") });
     j = await r.json().catch(() => null);
   }
-  if (!j || !j.ok) throw new Error((j && j.description) || "HTTP " + r.status);
+  if (!j || !j.ok) { tgErrLog(env, "tgUpload", j); throw new Error((j && j.description) || "HTTP " + r.status); }
   return j;
 }
 

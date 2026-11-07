@@ -1,4 +1,4 @@
-import { getJSON, putJSON, reply, esc } from "./base.js";
+import { getJSON, putJSON, reply, esc, upstreamTmo } from "./base.js";
 import { uiLang } from "./ui.js";
 import { UA, WIB, LFM_USER_KEY, LFM_USER_DEFAULT, NP_KEY, NP_TTL_MS, NP_FRESH_MS, MAL_TTL_MS, WX_LOC_KEY, WX_CTX_KEY, WX_TTL_MS } from "./consts.js";
 
@@ -13,8 +13,8 @@ async function cachedJSON(env, key, ttlMs, fetcher) {
 const KITSU_BASE = "https://kitsu.io/api/edge";
 const STATUS_EN = { finished: "finished", current: "ongoing", upcoming: "upcoming", unreleased: "unreleased", tba: "tba" };
 const SEASON_EN = ["winter", "winter", "winter", "spring", "spring", "spring", "summer", "summer", "summer", "fall", "fall", "fall"];
-async function kitsuGet(path) {
-  const r = await fetch(KITSU_BASE + path, { headers: { "user-agent": UA, accept: "application/vnd.api+json" } });
+async function kitsuGet(path, env) {
+  const r = await fetch(KITSU_BASE + path, { headers: { "user-agent": UA, accept: "application/vnd.api+json" }, signal: upstreamTmo(env) });
   if (!r.ok) throw new Error("Kitsu HTTP " + r.status);
   return await r.json();
 }
@@ -47,13 +47,13 @@ export async function animeLookup(env, kind, q) {
   kind = String(kind || "").toLowerCase().trim();
   q = String(q || "").trim().slice(0, 80);
   if (!["anime", "manga", "char", "season", "top", "random"].includes(kind)) throw new Error("anime_lookup: unknown kind '" + kind + "' (use anime|manga|char|season|top|random)");
-  if (kind === "random") return slimMedia((await kitsuGet("/anime?page[limit]=1&page[offset]=" + Math.floor(Math.random() * 15000))).data[0], "eps") || "random pick failed, try again";
+  if (kind === "random") return slimMedia((await kitsuGet("/anime?page[limit]=1&page[offset]=" + Math.floor(Math.random() * 15000), env)).data[0], "eps") || "random pick failed, try again";
   const cacheKey = "kitsu:" + kind + ":" + q.toLowerCase();
   return cachedJSON(env, cacheKey, MAL_TTL_MS, async () => {
-    if (kind === "anime") return slimMedia(attachCats(await kitsuGet("/anime?filter[text]=" + encodeURIComponent(q) + "&page[limit]=1&include=categories"))[0], "eps");
-    if (kind === "manga") return slimMedia(attachCats(await kitsuGet("/manga?filter[text]=" + encodeURIComponent(q) + "&page[limit]=1&include=categories"))[0], "ch");
+    if (kind === "anime") return slimMedia(attachCats(await kitsuGet("/anime?filter[text]=" + encodeURIComponent(q) + "&page[limit]=1&include=categories", env))[0], "eps");
+    if (kind === "manga") return slimMedia(attachCats(await kitsuGet("/manga?filter[text]=" + encodeURIComponent(q) + "&page[limit]=1&include=categories", env))[0], "ch");
     if (kind === "char") {
-      const j = await kitsuGet("/characters?filter[name]=" + encodeURIComponent(q) + "&page[limit]=1");
+      const j = await kitsuGet("/characters?filter[name]=" + encodeURIComponent(q) + "&page[limit]=1", env);
       const a = ((j.data || [])[0] || {}).attributes;
       if (!a) return null;
       const name = (a.names && (a.names.en || a.names.en_jp)) || a.canonicalName || "?";
@@ -62,10 +62,10 @@ export async function animeLookup(env, kind, q) {
     }
     if (kind === "season") {
       const d = new Date((Math.floor(Date.now() / 1000) + WIB) * 1000);
-      const s = slimList(await kitsuGet("/anime?filter[season]=" + SEASON_EN[d.getUTCMonth()] + "&filter[seasonYear]=" + d.getUTCFullYear() + "&sort=-userCount&page[limit]=5"), 5);
+      const s = slimList(await kitsuGet("/anime?filter[season]=" + SEASON_EN[d.getUTCMonth()] + "&filter[seasonYear]=" + d.getUTCFullYear() + "&sort=-userCount&page[limit]=5", env), 5);
       return s ? "Currently airing this season:\n" + s : null;
     }
-    if (kind === "top") { const s = slimList(await kitsuGet("/anime?sort=-userCount&page[limit]=5"), 5); return s ? "Most popular anime on Kitsu:\n" + s : null; }
+    if (kind === "top") { const s = slimList(await kitsuGet("/anime?sort=-userCount&page[limit]=5", env), 5); return s ? "Most popular anime on Kitsu:\n" + s : null; }
     return null;
   });
 }
@@ -82,14 +82,14 @@ export async function handleAnime(env, kind, chatId, q) {
 async function lfmRaw(env) {
   if (!env.LASTFM_KEY) return null;
   const user = (await env.KV.get(LFM_USER_KEY)) || env.LASTFM_USER || LFM_USER_DEFAULT;
-  const r = await fetch("https://ws.audioscrobbler.com/2.0/?method=user.getrecenttracks&format=json&limit=1&user=" + encodeURIComponent(user) + "&api_key=" + env.LASTFM_KEY, { headers: { "user-agent": UA } });
+  const r = await fetch("https://ws.audioscrobbler.com/2.0/?method=user.getrecenttracks&format=json&limit=1&user=" + encodeURIComponent(user) + "&api_key=" + env.LASTFM_KEY, { headers: { "user-agent": UA }, signal: upstreamTmo(env) });
   if (!r.ok) throw new Error("LastFM HTTP " + r.status);
   const j = await r.json();
   const t = j && j.recenttracks && Array.isArray(j.recenttracks.track) ? j.recenttracks.track[0] : null;
   if (!t || !t.name) return null;
   return { track: String(t.name).slice(0, 80), artist: String((t.artist && t.artist["#text"]) || "").slice(0, 80), live: !!(t["@attr"] && t["@attr"].nowplaying === "true"), uts: t.date && t.date.uts ? parseInt(t.date.uts, 10) : Math.floor(Date.now() / 1000) };
 }
-export async function lfmNow(env) {
+async function lfmNow(env) {
   try { return await cachedJSON(env, NP_KEY, NP_TTL_MS, () => lfmRaw(env)); } catch (_) { return null; }
 }
 export async function npLine(env) {
@@ -111,7 +111,7 @@ export async function handleNp(env, chatId) {
 
 const WX_DESC = { 0: "clear sky", 1: "mainly clear", 2: "partly cloudy", 3: "overcast", 45: "fog", 48: "rime fog", 51: "light drizzle", 53: "drizzle", 55: "heavy drizzle", 61: "light rain", 63: "rain", 65: "heavy rain", 66: "freezing rain", 67: "freezing rain", 71: "light snow", 73: "snow", 75: "heavy snow", 77: "snow grains", 80: "light showers", 81: "showers", 82: "violent showers", 85: "snow showers", 86: "snow showers", 95: "thunderstorm", 96: "thunderstorm, hail", 99: "thunderstorm, hail" };
 export async function geocode(env, q) {
-  const r = await fetch("https://geocoding-api.open-meteo.com/v1/search?count=1&language=en&format=json&name=" + encodeURIComponent(q), { headers: { "user-agent": UA } });
+  const r = await fetch("https://geocoding-api.open-meteo.com/v1/search?count=1&language=en&format=json&name=" + encodeURIComponent(q), { headers: { "user-agent": UA }, signal: upstreamTmo(env) });
   if (!r.ok) throw new Error("Geocode HTTP " + r.status);
   const j = await r.json();
   const g = j && j.results && j.results[0];
@@ -120,7 +120,7 @@ export async function geocode(env, q) {
 async function wxRaw(env) {
   const loc = await getJSON(env, WX_LOC_KEY, null);
   if (!loc || !loc.lat) return null;
-  const r = await fetch("https://api.open-meteo.com/v1/forecast?latitude=" + loc.lat + "&longitude=" + loc.lon + "&current=temperature_2m,apparent_temperature,weather_code&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max&forecast_days=1&timezone=auto", { headers: { "user-agent": UA } });
+  const r = await fetch("https://api.open-meteo.com/v1/forecast?latitude=" + loc.lat + "&longitude=" + loc.lon + "&current=temperature_2m,apparent_temperature,weather_code&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max&forecast_days=1&timezone=auto", { headers: { "user-agent": UA }, signal: upstreamTmo(env) });
   if (!r.ok) throw new Error("OpenMeteo HTTP " + r.status);
   const j = await r.json();
   const c = j && j.current, d = j && j.daily;

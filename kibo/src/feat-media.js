@@ -1,6 +1,6 @@
-import { tg, reply, getJSON, putJSON, scheduleDelete } from "./base.js";
+import { tg, reply, getJSON, putJSON, scheduleDelete, tgErrLog } from "./base.js";
 import { uiLang, SEP_LINE } from "./ui.js";
-import { UA, UA_BOT, DL_CACHE_PREFIX, DL_CACHE_TTL_MS, DL_POLL_MS, DL_POLL_MAX, DL_MAX_LINKS, DL_YT_FORMATS, DL_SEND_MAX, DL_SEND_PHOTO_MAX, FGSI_IG_URL, FGSI_KEY, KYIO_BASE, DL_DEL_MS, DELQ_KEY, DL_MENU_TTL_MS, DL_PICK_PREFIX, DL_SAV_PREFIX, DL_SAV_TTL_MS } from "./consts.js";
+import { UA, UA_BOT, DL_CACHE_PREFIX, DL_CACHE_TTL_MS, DL_POLL_MS, DL_POLL_MAX, DL_MAX_LINKS, DL_YT_FORMATS, DL_SEND_MAX, DL_URL_SEND_MAX, DL_SEND_PHOTO_MAX, FGSI_IG_URL, FGSI_KEY, KYIO_BASE, DL_DEL_MS, DELQ_KEY, DL_MENU_TTL_MS, DL_PICK_PREFIX, DL_SAV_PREFIX, DL_SAV_TTL_MS, DL_BIG_PREFIX, YT_PICK_PREFIX, YTS_MAX, NH_SAVE_PREFIX, NH_SAVES_KEY, NH_AUTODEL_MS, VAULT_CHAT_KEY, FILE_INDEX_KEY } from "./consts.js";
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
@@ -17,6 +17,7 @@ export function dlPlatform(raw) {
   if (/(^|\.)x\.com$/.test(h) || /(^|\.)twitter\.com$/.test(h)) return "x";
   if (/(^|\.)youtube\.com$/.test(h) || h === "youtu.be") return "youtube";
   if (/(^|\.)instagram\.com$/.test(h)) return "instagram";
+  if (/(^|\.)spotify\.com$/.test(h)) return "spotify";
   return null;
 }
 
@@ -27,12 +28,23 @@ export function xStatus(u) {
 
 const fnv1a = s => { let h = 0x811c9dc5; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; } return h.toString(16); };
 
-async function getJSONh(url) {
+async function getJSONh(url, ms) {
   try {
-    const r = await fetch(url, { headers: { "user-agent": UA }, signal: AbortSignal.timeout(15000) });
+    const r = await fetch(url, { headers: { "user-agent": UA }, signal: AbortSignal.timeout(ms || 15000) });
     if (!r.ok) return null;
     return await r.json();
   } catch (_) { return null; }
+}
+// Metadata nhdl: 100% dari Worker `nhdl-w` (mirror cin.guru + fallback nhentai API + cache — VPS-independent).
+async function nhMeta(env, id) {
+  const base = (env.NH_API || "").replace(/\/+$/, "");
+  if (!base) return null;
+  return getJSONh(base + "/api/gallery/" + id, 15000);
+}
+function nhDl(env, id, fmt) {
+  const base = (env.NH_DL || "").replace(/\/+$/, "");
+  if (!base) return "";
+  return base + "/dl/" + id + "?format=" + (fmt || "zip");
 }
 async function getText(url, ua) {
   try {
@@ -106,6 +118,31 @@ async function fsYtResolve(env, url) {
   return items.length ? { items: items.slice(0, DL_MAX_LINKS) } : null;
 }
 
+// puruboy-api (vercel, keyless, upstream beda: ssstik.io / yt-dlp via e2b sandbox) — instansi komunitas = ephemeral → tail fallback SETELAH btch; YT-nya lambat (spin-up sandbox) → timeout 35s
+async function puruTtResolve(env, url) {
+  const base = String((env && env.PURU_BASE) || "https://puruboy-api.vercel.app").replace(/\/+$/, "");
+  const j = await getJSONh(base + "/api/downloader/tiktok?url=" + encodeURIComponent(url));
+  if (!j || !j.success) return null;
+  const vu = String(j.video_url || "");
+  const mu = String(j.mp3_url || "");
+  const items = [];
+  if (dlUrlOk(vu)) items.push({ kind: "video", url: vu });
+  if (dlUrlOk(mu)) items.push({ kind: "audio", url: mu });
+  return items.length ? { items: items.slice(0, DL_MAX_LINKS), meta: { title: String(j.caption || "").slice(0, 120), author: String(j.author || "") } } : null;
+}
+async function puruYtResolve(env, url) {
+  const base = String((env && env.PURU_BASE) || "https://puruboy-api.vercel.app").replace(/\/+$/, "");
+  const j = await getJSONh(base + "/api/downloader/youtube?url=" + encodeURIComponent(url), 35000);
+  if (!j || !j.success || !Array.isArray(j.links)) return null;
+  const lk = j.links.filter(x => x && dlUrlOk(x.url));
+  // pilih link PALING PAKAI: yang bawa audio, mp4 dulu (webm 2160p no-audio = buang kalau ada yang laen)
+  const withA = lk.filter(x => x.hasAudio !== false);
+  const pick = withA.find(x => String(x.ext || "").toLowerCase() === "mp4") || withA[0] || lk[0];
+  if (!pick) return null;
+  const px = String(pick.ext || "").toLowerCase();
+  const kind = px === "m4a" || px === "mp3" || px === "webma" ? "audio" : "video";
+  return { items: [{ kind, fmt: String(pick.quality || ""), url: String(pick.url) }].slice(0, DL_MAX_LINKS), meta: { title: String(j.title || "").slice(0, 120), author: String(j.uploader || ""), duration: Number(j.duration) || 0 } };
+}
 async function fgsiIgResolve(url) {
   const j = await getJSONh(FGSI_IG_URL + "?apikey=" + encodeURIComponent(FGSI_KEY) + "&url=" + encodeURIComponent(url));
   const arr = j && j.status === true && j.data && Array.isArray(j.data.url) ? j.data.url : [];
@@ -179,8 +216,11 @@ export function igParseEmbed(html) {
   let vid = false;
   for (const e of ev) {
     if (e.k === "iv") { vid = e.v; continue; }
-    const m = html.slice(e.i, e.i + 1200).match(/https:[^"'\s<>]+/);
+    const seg = html.slice(e.i, e.i + 1200);
+    const m = seg.match(/https:[^"'\s<>]+/);
     if (!m) continue;
+    // NF-161016-3: video_url yang nilainya null/kosong jangan makan URL kunci berikutnya (display_url)
+    if (e.k === "vu" && (m.index > 60 || /display_url|thumbnail_src|video_url/.test(seg.slice(9, m.index)))) continue;
     const p = unesc(m[0]);
     if (!p.startsWith("https://") || !(p.includes("cdninstagram.com") || p.includes("fbcdn.net")) || seen.has(p)) continue;
     seen.add(p);
@@ -263,6 +303,80 @@ async function igCookieResolve(env, url) {
   return null;
 }
 
+async function btchPlat(env, url, plat) {
+  // btch-downloader-api (vercel, keyless) — flaky (502 transien ~2/3 dari CF egress, VPS lancar) → 3 attempt, selalu paling belakang di chain
+  const base = String((env && env.BTCH_BASE) || "https://btch-downloader-api-green.vercel.app").replace(/\/+$/, "");
+  const ep = base + "/api/download/" + plat + "?url=" + encodeURIComponent(url);
+  const gap = Number(env && env.DL_BTCH_GAP_MS) > 0 ? Number(env.DL_BTCH_GAP_MS) : 2000;
+  let j = null;
+  for (let i = 0; i < 3 && !j; i++) {
+    if (i) await sleep(gap);
+    const r = await getJSONh(ep);
+    if (r && r.success && r.normalized) j = r;
+    else if (r && r.success && r.result) j = r; // gate longgar (mapper di bawah yang bedah shape flat/nested — respons aneh = null jujur)
+  }
+  // spotify = bentuk sendiri: formats[] (MP3 full-track, spotimate.io JWT-signed), gak ada normalized.media — shape-nya ASUP NAJIS: flat result.formats (riset pagi) vs nested result.result.formats + developer wrapper (live 22 Okt sore) → dua-duanya diterima
+  const sp = j && j.result ? (Array.isArray(j.result.formats) ? j.result : j.result.result && Array.isArray(j.result.result.formats) ? j.result.result : null) : null;
+  if (sp) {
+    const items = sp.formats.filter(x => x && dlUrlOk(x.url)).map(x => ({ kind: "audio", url: String(x.url) })).slice(0, DL_MAX_LINKS);
+    return items.length ? { items, meta: { title: String(sp.title || "").slice(0, 120) } } : null;
+  }
+  const m = j && j.normalized && Array.isArray(j.normalized.media) ? j.normalized.media : null;
+  if (!m || !m.length) return null;
+  // btch suka mislabel foto sbg type:"video" (DeirfZNvNc0 = foto → "Video"); proxy rapidcdn = octet-stream + CF-fronted (sniff fetch keblokir CF-to-CF) → decode JWT token di URL dulu (gratis), sniff cuma fallback
+  const items = (await Promise.all(m.filter(x => x && dlUrlOk(x.url)).map(async x => {
+    let kind = x.type === "audio" ? "audio" : x.type === "image" || x.type === "photo" ? "photo" : "video";
+    let url = String(x.url);
+    if (kind === "video") {
+      const tk = btchTokenKind(url);
+      if (tk === "image") kind = "photo";
+      else {
+        const src = btchTokenUrl(url);
+        if (src) {
+          // proxy rapidcdn = TG gak bisa fetch (sendVideo by URL nolak) + worker gak bisa full-GET (CF-to-CF keblokir) → video item = swap ke underlying scontent asli (signed ~1 hari, di atas TTL cache /dl 1 jam); foto tetep proxy (jalur foto udah live-verified)
+          url = src;
+          if (!tk) { const ct = await btchSniff(env, url); if (ct.startsWith("image/")) kind = "photo"; }
+        } else {
+          const ct = await btchSniff(env, url);
+          if (ct.startsWith("image/")) kind = "photo";
+        }
+      }
+    }
+    return { kind, fmt: "", url };
+  }))).slice(0, DL_MAX_LINKS);
+  return items.length ? { items } : null;
+}
+const btchTokenUrl = u => {
+  try {
+    const tk = (String(u).split("token=")[1] || "").split("&")[0];
+    const seg = tk.split(".");
+    if (seg.length < 2) return "";
+    const b = atob(seg[1].replace(/-/g, "+").replace(/_/g, "/"));
+    const j = JSON.parse(new TextDecoder().decode(Uint8Array.from(b, c => c.charCodeAt(0))));
+    const src = String((j && j.url) || "");
+    return src.startsWith("https://") ? src : "";
+  } catch (_) { return ""; }
+};
+const btchTokenKind = u => {
+  const src = btchTokenUrl(u);
+  return /\.(jpg|jpeg|png|webp|gif|heic|heif)(?:[?#]|$)/i.test(src) ? "image" : /\.(mp4|mov|webm|m4v)(?:[?#]|$)/i.test(src) ? "video" : "";
+};
+async function btchSniff(env, url) {
+  try {
+    const r = await fetch(url, { headers: { Range: "bytes=0-31" }, signal: AbortSignal.timeout(dlSizeMs(env)) });
+    if (!r.ok) return "";
+    const b = new Uint8Array(await r.arrayBuffer());
+    if (b.length >= 3 && b[0] === 0xff && b[1] === 0xd8) return "image/jpeg";
+    if (b.length >= 4 && b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47) return "image/png";
+    if (b.length >= 3 && b[0] === 0x47 && b[1] === 0x49 && b[2] === 0x46) return "image/gif";
+    if (b.length >= 12 && b[8] === 0x57 && b[9] === 0x45 && b[10] === 0x42 && b[11] === 0x50) return "image/webp";
+    if (b.length >= 12 && b[4] === 0x66 && b[5] === 0x74 && b[6] === 0x79 && b[7] === 0x70) {
+      const br = String.fromCharCode(b[8], b[9], b[10], b[11]);
+      return ["heic", "heix", "hevc", "heim", "hevm", "mif1", "msf1"].includes(br) ? "image/heic" : "video/mp4";
+    }
+    return "";
+  } catch (_) { return ""; }
+}
 async function ltoStart(format, url) {
   const j = await getJSONh("https://loader.to/ajax/download.php?format=" + format + "&url=" + encodeURIComponent(url));
   if (!j || !j.success || !j.progress_url) return null;
@@ -290,8 +404,48 @@ async function ltoMulti(env, url, formats) {
   formats.forEach((f, i) => { if (outs[i]) items.push({ kind: f === "mp3" ? "audio" : "video", fmt: f === "mp3" ? "" : f + "p", url: outs[i] }); });
   return items.length ? { items } : null;
 }
+const ytMediaCt = ct => !ct || ct === "application/octet-stream" || ct === "binary/octet-stream" || /^(audio|video|image)\//.test(ct);
+async function ytMeta(env, url) {
+  try {
+    const id = (String(url).match(/(?:youtu\.be\/|[?&]v=|\/shorts\/|\/embed\/|\/live\/)([\w-]{11})/) || [])[1];
+    if (!id) return null;
+    const [oe, vd] = await Promise.all([
+      getJSONh("https://www.youtube.com/oembed?format=json&url=" + encodeURIComponent("https://www.youtube.com/watch?v=" + id), 8000),
+      getJSONh("https://returnyoutubedislikeapi.com/votes?videoId=" + id, 8000)
+    ]);
+    if (!oe || !oe.title) return null;
+    const m = { title: String(oe.title).slice(0, 180), author: String(oe.author_name || "").slice(0, 60), views: vd && +vd.viewCount > 0 ? +vd.viewCount : 0, likes: vd && +vd.likes > 0 ? +vd.likes : 0, dislikes: vd && +vd.dislikes > 0 ? +vd.dislikes : 0, subs: "" }; // oEmbed = title+author (keyless, CF-OK 107ms); RYD = views+likes+dislikes (25ms)
+    const au = String(oe.author_url || "");
+    if (au.startsWith("https://www.youtube.com/")) {
+      try {
+        const ch = await fetch(au + "/about?hl=en", { headers: { "user-agent": UA }, signal: AbortSignal.timeout(8000) });
+        const t = ch.ok ? await ch.text() : "";
+        m.subs = (t.match(/"subscriberCountText":"([^"]+?) subscribers?"/) || [])[1] || ""; // about page = data utuh dari CF egress (406ms) — innertube = LOGIN_REQUIRED, ini satu-satunya jalur subs keyless; hl=en = angka udah compact (1.41M)
+      } catch (_) {}
+    }
+    return m;
+  } catch (_) { return null; }
+}
+const fmtViews = n => n >= 1e9 ? (n / 1e9).toFixed(1).replace(/\.0$/, "") + "B" : n >= 1e6 ? (n / 1e6).toFixed(1).replace(/\.0$/, "") + "M" : n >= 1e3 ? (n / 1e3).toFixed(1).replace(/\.0$/, "") + "K" : String(n); // v2.68.8: +tier B (video super-viral 4.2B — dulu 4247.2M)
+const durToSec = s => { const m = String(s || "").match(/(?:(\d+):)?(\d+):(\d{2})/); return m ? ((+(m[1] || 0)) * 3600) + (+m[2] * 60) + +m[3] : 0; };
+async function ytDurSeconds(env, url) { // durasi menu YT — innertube keyless, id-match videoId (probe 23 Okt: query videoId → hasil #1 = video itu sendiri)
+  const id = (String(url).match(/(?:youtu\.be\/|[?&]v=|\/shorts\/|\/embed\/|\/live\/)([\w-]{11})/) || [])[1];
+  if (!id) return 0;
+  const res = await ytSearch(id);
+  const it = res && res.items && res.items.find(x => x.id === id);
+  if (!it || !it.dur || it.dur === "LIVE") return 0;
+  return durToSec(it.dur);
+}
 async function ytResolve(env, url) {
-  return (await ltoMulti(env, url, DL_YT_FORMATS)) || (await fsYtResolve(env, url));
+  const r = (await ltoMulti(env, url, DL_YT_FORMATS)) || (await fsYtResolve(env, url)) || (await btchPlat(env, url, "youtube")) || (await puruYtResolve(env, url));
+  if (!r || !r.items || !r.items.length) return r;
+  const pr = await Promise.all(r.items.map(it => dlProbe(env, it.url))); // v2.68.3: ekor YT divalidasi (22 Okt: loader.to = 302 halaman iklan savenow; puru = googlevideo 403 IP-locked) — URL mati dibuang, bukan tombol zombie
+  const alive = r.items.filter((_, i) => ytMediaCt(pr[i].ct) && pr[i].st < 400);
+  if (!alive.length) return null;
+  const mt = r.meta || {}; // v2.68.5: metadata YT buat menu (loader.to gak bawa meta sama sekali — menu URL-only polos)
+  if (!mt.title || !mt.views || !mt.likes) { const em = await ytMeta(env, url); if (em) { mt.title = mt.title || em.title; mt.author = mt.author || em.author; mt.views = mt.views || em.views; mt.likes = mt.likes || em.likes; mt.dislikes = mt.dislikes || em.dislikes; mt.subs = mt.subs || em.subs; } }
+  if (!mt.duration) { const d = await ytDurSeconds(env, url); if (d) mt.duration = d; } // v2.68.x: durasi menu — innertube keyless, id-match (gak terima top-hit random); L/R data senyap kalau gak ketemu
+  return Object.assign({}, r, { items: alive, meta: mt });
 }
 
 async function ttCanonical(url) {
@@ -302,16 +456,28 @@ async function ttCanonical(url) {
     return r && r.url ? r.url : url;
   } catch (_) { return url; }
 }
+async function ttMeta(env, url) { // keyless tiktok.com/oembed (probe 23 Okt: 200 dari CF egress) — tanpa token, beda dari IG yang butuh cookie; blog tt 23 Okt
+  try {
+    const r = await getJSONh("https://www.tiktok.com/oembed?url=" + encodeURIComponent(url), 8000);
+    if (!r || !r.title) return null;
+    return { title: String(r.title).slice(0, 180), author: String(r.author_name || "").slice(0, 60) };
+  } catch (_) { return null; }
+}
 async function rawResolve(env, url, plat) {
   if (plat === "tiktok") {
     const cu = await ttCanonical(url);
 
-    let r = (await tikwmResolve(cu)) || (await fsTtResolve(cu));
-    if (r && r.meta && r.meta.slide) {
-      const e = await ttEmbedResolve(cu);
-      if (e) r = { items: e.items.concat(r.items), meta: { title: r.meta.title || "" } };
+    let r = await btchPlat(env, url, "tiktok"); // v2.68.x reorder: btch primary — embed 429 (mati), tikwm bakar quota shared CF IP → duluan btch, 0 buang kerja mati
+    if (!r) {
+      let rr = (await tikwmResolve(cu)) || (await fsTtResolve(cu));
+      if (rr && rr.meta && rr.meta.slide) {
+        const e = await ttEmbedResolve(cu);
+        if (e) rr = { items: e.items.concat(rr.items), meta: { title: rr.meta.title || "" } };
+      }
+      r = rr || (await ttEmbedResolve(url)) || (await tikwmResolve(url)) || (await fsTtResolve(url)) || (await puruTtResolve(env, url));
     }
-    return r || (await ttEmbedResolve(url)) || (await tikwmResolve(url)) || (await fsTtResolve(url));
+    if (r && !(r.meta && r.meta.title && r.meta.author)) { const tm = await ttMeta(env, cu); if (tm) { r.meta = r.meta || {}; r.meta.title = r.meta.title || tm.title; r.meta.author = r.meta.author || tm.author; } } // oEmbed tiktok keyless = judul+author (blog tt 23 Okt)
+    return r;
   }
   if (plat === "x") {
     const s = xStatus(new URL(url));
@@ -327,13 +493,21 @@ async function rawResolve(env, url, plat) {
     if (ck && ck.items) return ck;
     const f = await fgsiIgResolve(url);
     if (f) return f;
+    const bt = await btchPlat(env, url, "instagram");
+    if (bt) return bt;
     if (ck && ck.authdead) return { authdead: 1 };
     return e && e.blocked ? { blocked: 1 } : null;
+  }
+  if (plat === "spotify") {
+    const b = await btchPlat(env, url, "spotify");
+    if (b) return b;
+    const k = await kyioSpotifyResolve(url); // fallback #2 (kyio 10 RPM shared-IP — cache 1h di atasnya, jarang kepanggil)
+    return k ? { items: k.items, meta: { title: k.title || "" } } : null;
   }
   return null;
 }
 
-export async function dlResolve(env, url, plat) {
+async function dlResolve(env, url, plat) {
   const ck = DL_CACHE_PREFIX + fnv1a(plat + "|" + url);
   const c = await getJSON(env, ck, null);
   if (c && c.exp > Date.now() && c.v) return c.v;
@@ -344,9 +518,39 @@ export async function dlResolve(env, url, plat) {
   return v;
 }
 
-const dlRows = (L, items) => items.map((it, i) => [{ text: it.kind === "video" ? L.dlBtnVideo(it.fmt || "") : it.kind === "audio" ? L.dlBtnAudio : L.dlBtnPhoto(i + 1), url: it.url }]);
+// v2.69.7: HARD cap buat resolve biar placeholder "working…" SELALU diganti pesan jujur dalam budget
+// (fix NF-251024-1: chain IG serial embed→cookie→fgsi→btch bisa molor >resp deadline dari CF egress,
+//  handleDl cuma nulis pesan final SETELAH seluruh chain kelar → placeholder keliatan macet/gak pernah jujur).
+// Kalau resolve nyerempet cap → balik { hardTimeout:1 } → caller tampil dlTimeout jujur, bukan diem di "working…".
+// .catch side guard bikin late-reject dari resolve yang udah kepotong gak jadi unhandled rejection.
+const dlHardMs = env => parseInt((env && env.DL_RESOLVE_HARD_MS) || "", 10) || 30000;
+async function dlResolveHard(env, url, plat) {
+  try {
+    return await Promise.race([
+      dlResolve(env, url, plat).catch(() => ({ hardErr: 1 })),
+      new Promise(r => setTimeout(() => r({ hardTimeout: 1 }), dlHardMs(env)))
+    ]);
+  } catch (_) { return null; }
+}
+
+const dlUrlOk = u => typeof u === "string" && /^https:\/\/\S+$/.test(u);
+export const dlRows = (L, items, perRow = 4) => {
+  const flat = items.filter(it => dlUrlOk(it.url)).map((it, i) => ({ text: it.kind === "video" ? L.dlBtnVideo(it.fmt || "") : it.kind === "audio" ? L.dlBtnAudio : L.dlBtnPhoto(i + 1), url: it.url }));
+  const rows = [];
+  for (let i = 0; i < flat.length; i += perRow) rows.push(flat.slice(i, i + perRow));
+  return rows;
+};
 
 const dlSizeMs = env => parseInt(env.DL_SIZE_TIMEOUT_MS || "", 10) || 15000;
+// probe gabungan 1x Range fetch: status + content-type + ukuran — validasi ekor YT + gate Direct Link di menu (v2.68.3)
+async function dlProbe(env, url) {
+  try {
+    const r = await fetch(url, { headers: { Range: "bytes=0-0" }, signal: AbortSignal.timeout(dlSizeMs(env)) });
+    try { if (r.body) r.body.cancel(); } catch (_) {}
+    const cr = r.headers.get("content-range");
+    return { st: r.status, ct: (r.headers.get("content-type") || "").split(";")[0].trim().toLowerCase(), sz: cr ? +(cr.split("/")[1] || 0) : +(r.headers.get("content-length") || 0) };
+  } catch (_) { return { st: 0, ct: "", sz: 0 }; }
+}
 async function dlSize(env, url) {
   try {
     const r = await fetch(url, { headers: { Range: "bytes=0-0" }, signal: AbortSignal.timeout(dlSizeMs(env)) });
@@ -358,35 +562,24 @@ async function dlSize(env, url) {
 const dlCap = (title, src) => { const t = title ? hesc(String(title).slice(0, 180)) : ""; const s = src ? "\n🔗 " + hesc(String(src).slice(0, 300)) : ""; return (t + s).trim(); };
 const audioExt = m => m === "audio/mpeg" ? "mp3" : m === "audio/ogg" ? "ogg" : m === "audio/wav" ? "wav" : m === "audio/flac" ? "flac" : "m4a";
 const mimeLabel = m => m === "audio/mpeg" ? "MP3" : m === "audio/ogg" ? "OGG" : m === "audio/wav" ? "WAV" : m === "audio/flac" ? "FLAC" : m === "audio/mp4" ? "M4A" : "";
-async function dlMimeProbe(env, url) {
-  try {
-    const r = await fetch(url, { headers: { Range: "bytes=0-0" }, signal: AbortSignal.timeout(dlSizeMs(env)) });
-    if (!r.ok) return "";
-    return (r.headers.get("content-type") || "").split(";")[0].trim().toLowerCase();
-  } catch (_) { return ""; }
-}
 async function audioUpload(env, chatId, url, title, fcap, tok) {
-  let buf = null, ct = "";
-  try {
-    const r = await fetch(url, { headers: { "user-agent": UA }, signal: AbortSignal.timeout(60000) });
-    if (!r.ok) return null;
-    ct = (r.headers.get("content-type") || "").split(";")[0].trim().toLowerCase();
-    if (ct && ct !== "application/octet-stream" && ct !== "binary/octet-stream" && !/^(audio|video)\//.test(ct)) return null;
-    buf = await r.arrayBuffer();
-  } catch (_) { return null; }
-  if (!buf || !buf.byteLength || buf.byteLength > DL_SEND_MAX) return null;
+  const f = await dlFetchCap(url, DL_SEND_MAX);
+  if (!f) return null;
+  const ct = f.ct;
   const safe = String(title || "audio").replace(/[\\/:*?"<>|]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 60) || "audio";
   const form = new FormData();
   form.append("chat_id", String(chatId));
   form.append("title", safe);
   if (fcap) { form.append("caption", fcap); form.append("parse_mode", "HTML"); }
-  form.append("reply_markup", JSON.stringify({ inline_keyboard: [[{ text: "💾 Save", callback_data: "dlsav:" + tok }]] }));
-  form.append("audio", new Blob([buf], { type: ct || "audio/mp4" }), safe + "." + audioExt(ct));
+  const auRows = [[{ text: "💾 Save", callback_data: "dlsav:" + tok }]];
+  if (dlUrlOk(url)) auRows.push([{ text: "🔗 Direct Link", url }]);
+  form.append("reply_markup", JSON.stringify({ inline_keyboard: auRows }));
+  form.append("audio", new Blob(f.chunks, { type: ct || "audio/mp4" }), safe + "." + audioExt(ct));
   try {
     const r = await fetch("https://api.telegram.org/bot" + env.TG_TOKEN + "/sendAudio", { method: "POST", body: form });
     const j = await r.json().catch(() => null);
-    if (!j || !j.ok) console.error("tg fail: sendAudio " + JSON.stringify((j && j.description) || "").slice(0, 200));
-    if (env.__probe && j && j.ok) env.__probe.push({ mid: (j.result && j.result.message_id) || null, method: "sendAudio", chat: chatId, text: String(fcap || "").slice(0, 400) });
+    if (!j || !j.ok) tgErrLog(env, "sendAudio", j);
+    if (env.__probe && j && j.ok) env.__probe.push({ mid: (j.result && j.result.message_id) || null, method: "sendAudio", chat: chatId, text: String(fcap || "").slice(0, 400), fn: (j.result && j.result.audio && j.result.audio.file_name) || (safe + "." + audioExt(ct)) });
     return j;
   } catch (_) { return null; }
 }
@@ -395,18 +588,24 @@ async function dlSendFiles(env, chatId, items, title, L, src) {
   const photos = [];
   let count = 0;
   for (const it of items) {
-    const cap = it.kind === "photo" ? DL_SEND_PHOTO_MAX : DL_SEND_MAX;
+    const capUrl = it.kind === "photo" ? DL_SEND_PHOTO_MAX : DL_URL_SEND_MAX; // gate by-URL (TG limit 20MB) — band 15-20MB = by-URL doang (bytes fallback gak kuat)
     const sz = await dlSize(env, it.url);
-    if (!sz || sz > cap) { rest.push(it); continue; }
-    if (it.kind === "photo") { photos.push(it); continue; }
+    // sz=0 = ukuran gak ketahuan (CDN downloader modern: savenow.to = chunked, no content-length, Range diabaikan) — video/audio TETEP dicoba (TG yang nentuin via limit by-URL, fallback bytes dlFetchCap bail di DL_SEND_MAX); foto tetep butuh size (jalur lama by-URL 5MB)
+    if (sz > capUrl) { rest.push(it); continue; }
+    if (it.kind === "photo") { if (!sz) rest.push(it); else photos.push(it); continue; }
     const isVid = it.kind === "video";
     const tok = rndTok();
     try { await putJSON(env, DL_SAV_PREFIX + tok, { c: chatId, k: it.kind, t: String(title || "").slice(0, 60), exp: Date.now() + DL_SAV_TTL_MS }, env.DB ? { ttlMs: DL_SAV_TTL_MS } : undefined); } catch (_) {}
     const fcap = dlCap(title, src) + (it.pos ? "\n🎬 " + it.pos + "/" + it.total : "");
-    const body = { chat_id: chatId, reply_markup: { inline_keyboard: [[{ text: "💾 Save", callback_data: "dlsav:" + tok }]] } };
+    const svRows = [[{ text: "💾 Save", callback_data: "dlsav:" + tok }]];
+    if (dlUrlOk(it.url)) svRows.push([{ text: "🔗 Direct Link", url: it.url }]);
+    const body = { chat_id: chatId, reply_markup: { inline_keyboard: svRows } };
     if (isVid) { body.video = it.url; body.supports_streaming = true; if (fcap) { body.caption = fcap; body.parse_mode = "HTML"; } }
     else { body.audio = it.url; if (title) body.title = String(title).slice(0, 60); if (fcap) { body.caption = fcap; body.parse_mode = "HTML"; } }
-    let s = await tg(env, isVid ? "sendVideo" : "sendAudio", body);
+    let s = null;
+    if (!isVid) s = await audioUpload(env, chatId, it.url, title, fcap, tok); // v2.68.7: audio = multipart SELALU duluan (filename = judul lagu; probe sz bisa flake → dulu size-gated = kadang keby-URL-an = audio-proxy.mp3 lagi); by-URL cuma fallback
+    if (!s || !s.ok) s = await tg(env, isVid ? "sendVideo" : "sendAudio", body);
+    if (isVid && (!s || !s.ok)) s = await videoUpload(env, chatId, it.url, fcap, tok);
     if (!isVid && s && s.ok && s.result && !s.result.audio && s.result.document) {
       try { await tg(env, "deleteMessage", { chat_id: chatId, message_id: s.result.message_id }); } catch (_) {}
       s = await audioUpload(env, chatId, it.url, title, fcap, tok);
@@ -419,13 +618,15 @@ async function dlSendFiles(env, chatId, items, title, L, src) {
       const mv = r.video || r.audio || {};
       try { await putJSON(env, DL_SAV_PREFIX + tok, { c: chatId, m: r.message_id, f: mv.file_id || "", k: it.kind, mime: mv.mime_type || "", s: mv.file_size || sz, t: String(title || "").slice(0, 60), exp: Date.now() + DL_SAV_TTL_MS }, env.DB ? { ttlMs: DL_SAV_TTL_MS } : undefined); } catch (_) {}
       await deleteLater(env, chatId, r.message_id, dlDelMs(env));
-    } else rest.push(it);
+    } else { rest.push(it); try { await putJSON(env, DL_BIG_PREFIX + fnv1a(it.url), { u: it.url, exp: Date.now() + DL_SAV_TTL_MS }, env.DB ? { ttlMs: DL_SAV_TTL_MS } : undefined); } catch (_) {} } // catet URL gak bisa dikirim → menu berikutnya langsung Direct Link (v2.68.3)
   }
   const pcap = dlCap(title, src);
   if (photos.length === 1) {
     const body = { chat_id: chatId, photo: photos[0].url };
     if (pcap) { body.caption = pcap; body.parse_mode = "HTML"; }
-    const s = await tg(env, "sendPhoto", body);
+    if (dlUrlOk(photos[0].url)) body.reply_markup = { inline_keyboard: [[{ text: "🔗 Direct Link", url: photos[0].url }]] };
+    let s = await tg(env, "sendPhoto", body);
+    if (!s || !s.ok) s = await photoUpload(env, chatId, photos[0].url, pcap, body.reply_markup);
     if (s && s.ok) count++; else rest.push(photos[0]);
   } else if (photos.length > 1) {
     for (let i = 0; i < photos.length; i += 10) {
@@ -438,9 +639,71 @@ async function dlSendFiles(env, chatId, items, title, L, src) {
   return { count, rest: rest.slice(0, DL_MAX_LINKS) };
 }
 
+// download STREAMING dgn bail-out di cap — dulu arrayBuffer telanjang: file raksasa (2GB loader.to) = OOM isolate / 60s timeout sia-sia
+async function dlFetchCap(url, cap) {
+  try {
+    const r = await fetch(url, { headers: { "user-agent": UA }, signal: AbortSignal.timeout(60000) });
+    if (!r.ok || !r.body) return null;
+    const ct = (r.headers.get("content-type") || "").split(";")[0].trim().toLowerCase();
+    if (ct && ct !== "application/octet-stream" && ct !== "binary/octet-stream" && !/^(audio|video|image)\//.test(ct)) return null;
+    const rd = r.body.getReader();
+    const chunks = [];
+    let got = 0;
+    for (;;) {
+      const cr = await rd.read();
+      if (cr.done) break;
+      got += cr.value.length;
+      if (got > cap) { try { await rd.cancel(); } catch (_) {} return null; }
+      chunks.push(cr.value);
+    }
+    if (!got) return null;
+    return { chunks, ct, size: got }; // Blob(f.chunks) di caller — dulu concat Uint8Array manual = +1x copy memori (cap penuh = 2x-3x peak)
+  } catch (_) { return null; }
+}
+async function videoUpload(env, chatId, url, fcap, tok) {
+  const f = await dlFetchCap(url, DL_SEND_MAX);
+  if (!f) return null;
+  const ct = f.ct;
+  const form = new FormData();
+  form.append("chat_id", chatId);
+  form.append("video", new Blob(f.chunks, { type: "video/mp4" }), "video.mp4");
+  form.append("supports_streaming", "true");
+  if (fcap) { form.append("caption", fcap); form.append("parse_mode", "HTML"); }
+  const vuRows = [[{ text: "\ud83d\udcbe Save", callback_data: "dlsav:" + tok }]];
+  if (dlUrlOk(url)) vuRows.push([{ text: "🔗 Direct Link", url }]);
+  form.append("reply_markup", JSON.stringify({ inline_keyboard: vuRows }));
+  try {
+    const r = await fetch("https://api.telegram.org/bot" + env.TG_TOKEN + "/sendVideo", { method: "POST", body: form });
+    const j = await r.json().catch(() => null);
+    if (!j || !j.ok) tgErrLog(env, "sendVideo", j);
+    if (env.__probe && j && j.ok) env.__probe.push({ mid: (j.result && j.result.message_id) || null, method: "sendVideo", chat: chatId, text: String(fcap || "").slice(0, 400) });
+    return j;
+  } catch (_) { return null; }
+}
+async function photoUpload(env, chatId, url, cap, mark) {
+  let buf = null;
+  try {
+    const r = await fetch(url, { headers: { "user-agent": UA }, signal: AbortSignal.timeout(60000) });
+    if (!r.ok) return null;
+    buf = await r.arrayBuffer();
+  } catch (_) { return null; }
+  if (!buf || !buf.byteLength || buf.byteLength > DL_SEND_PHOTO_MAX) return null;
+  const form = new FormData();
+  form.append("chat_id", chatId);
+  if (cap) { form.append("caption", cap); form.append("parse_mode", "HTML"); }
+  if (mark) form.append("reply_markup", JSON.stringify(mark));
+  form.append("photo", new Blob([buf], { type: "image/jpeg" }), "photo.jpg");
+  try {
+    const r = await fetch("https://api.telegram.org/bot" + env.TG_TOKEN + "/sendPhoto", { method: "POST", body: form });
+    const j = await r.json().catch(() => null);
+    if (!j || !j.ok) tgErrLog(env, "sendPhoto", j);
+    if (env.__probe && j && j.ok) env.__probe.push({ mid: (j.result && j.result.message_id) || null, method: "sendPhoto", chat: chatId, text: String(cap || "").slice(0, 400) });
+    return j;
+  } catch (_) { return null; }
+}
 const dlDelMs = env => parseInt(env.DL_DEL_MS || "", 10) || DL_DEL_MS;
 const dlMenuMs = env => parseInt(env.DL_MENU_MS || "", 10) || DL_MENU_TTL_MS;
-async function deleteLater(env, chatId, mid, ms) {
+export async function deleteLater(env, chatId, mid, ms) {
   scheduleDelete(env, chatId, mid, ms);
   try {
     const q = ((await getJSON(env, DELQ_KEY, [])) || []).filter(x => !(x && x.c === chatId && x.m === mid));
@@ -450,7 +713,7 @@ async function deleteLater(env, chatId, mid, ms) {
 }
 const rndTok = () => Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4);
 const fmtDur = s => { s = Math.round(Number(s) || 0); return s ? Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0") : ""; };
-export function dlMenuText(L, plat, meta, photosDone, vaItems) {
+export function dlMenuText(L, plat, meta, photosDone, vaItems, urlOnly) {
   const names = { tiktok: "TikTok", x: "X (Twitter)", youtube: "YouTube", instagram: "Instagram", song: "Song search", spotify: "Spotify" };
   const lines = [L.dlMenuHead];
   if (photosDone) lines.push(L.dlPhotosDone(photosDone));
@@ -459,24 +722,37 @@ export function dlMenuText(L, plat, meta, photosDone, vaItems) {
   lines.push(L.dlType + " " + (names[plat] || plat));
   if (meta.title) lines.push(L.dlTitle + " " + hesc(String(meta.title).slice(0, 180)));
   if (meta.author) lines.push(L.dlAuthor + " " + hesc(String(meta.author).slice(0, 60)));
+  if (meta.subs) lines.push(L.dlSubs + " " + hesc(String(meta.subs).slice(0, 30)));
+  if (meta.views) lines.push(L.dlViews + " " + fmtViews(+meta.views));
+  if (meta.likes) lines.push(L.dlLikes + " " + fmtViews(+meta.likes));
+  if (meta.dislikes) lines.push(L.dlDislikes + " " + fmtViews(+meta.dislikes)); // RYD estimate aja (YT sembunyiin dislikes sejak 2021) — angka kecil, gak ngaku presisi
   if (meta.caption) lines.push(L.dlCaption + " " + hesc(String(meta.caption).slice(0, 180)));
   if (meta.duration) lines.push(L.dlDuration + " " + fmtDur(meta.duration));
   if (meta.slide) lines.push(L.dlSlideNote);
-  lines.push(SEP_LINE, L.dlPickNote);
+  lines.push(SEP_LINE, urlOnly ? L.dlUrlNote : L.dlPickNote); // v2.68.5: hint correlate — URL-only = bukan "file keirim auto-delete"
   return lines.join("\n");
 }
 async function dlMenuShow(env, chatId, L, phMid, plat, vaItems, meta, photosDone, linkRows, src) {
   const multi = vaItems.length > 1;
   const rows = [];
-  for (const it of vaItems) {
+  const pr = await Promise.all(vaItems.map(it => dlProbe(env, it.url))); // 1x probe (ct+size) per varian — label audio + gate Direct Link (v2.68.3)
+  for (let i = 0; i < vaItems.length; i++) {
+    const it = vaItems[i];
+    let lbl = it.fmt || "";
+    if (it.kind === "audio" && !lbl) lbl = mimeLabel(pr[i].ct) || "MP3";
+    let big = pr[i].sz > DL_URL_SEND_MAX || (plat === "youtube" && !pr[i].sz && it.kind === "video"); // v2.68.10: forceBig = VIDEO doang — MP3 lagu normal ringan (≤15MB) = dicoma + multipart (audioUpload, filename judul); video YT memang 23-63MB (v2.68.4)
+    if (!big) { const b = await getJSON(env, DL_BIG_PREFIX + fnv1a(it.url), null); big = !!(b && b.exp > Date.now()); } // dipelajari dari pick gagal — sz=0 pun bisa ketahuan gak bisa dikirim
+    if (big && dlUrlOk(it.url)) { // v2.68.3: varian yang pasti gagal kirim = tombol Direct Link dari awal (no double-press)
+      rows.push([{ text: it.kind === "video" ? (it.pos ? "🎥 " + it.pos + "/" + it.total : "🎥 " + (it.fmt || L.dlVideoBtn)) : "🎵 " + lbl, url: it.url }]);
+      continue;
+    }
     const tok = rndTok();
     try { await putJSON(env, DL_PICK_PREFIX + tok, { c: chatId, item: it, t: meta.title || "", s: src || "", multi, exp: Date.now() + DL_SAV_TTL_MS }, env.DB ? { ttlMs: DL_SAV_TTL_MS } : undefined); } catch (_) {}
-    let lbl = it.fmt || "";
-    if (it.kind === "audio" && !lbl) lbl = mimeLabel(await dlMimeProbe(env, it.url)) || "MP3";
     rows.push([{ text: it.kind === "video" ? (it.pos ? "🎥 " + it.pos + "/" + it.total : "🎥 " + (it.fmt || L.dlVideoBtn)) : "🎵 " + lbl, callback_data: "dlpick:" + tok }]);
   }
   for (const r of linkRows || []) rows.push(r);
-  const text = dlMenuText(L, plat, meta, photosDone, vaItems);
+  const urlOnly = rows.length > 0 && !rows.some(rw => (rw || []).some(b => b.callback_data)); // semua tombol = URL button (gak ada varian file)
+  const text = dlMenuText(L, plat, meta, photosDone, vaItems, urlOnly);
   let mid = phMid;
   if (mid) await tg(env, "editMessageText", { chat_id: chatId, message_id: mid, text, parse_mode: "HTML", reply_markup: { inline_keyboard: rows } });
   else {
@@ -492,12 +768,20 @@ export async function handleDlPick(env, cbId, chatId, mid, tok) {
   if (!multi) { try { await env.KV.delete(DL_PICK_PREFIX + tok); } catch (_) {} }
   if (!e || !e.item) { await tg(env, "answerCallbackQuery", { callback_query_id: cbId, text: L.dlExpired }); return; }
   const sent = await dlSendFiles(env, chatId, [e.item], e.t || "", L, e.s || "");
-  if (multi) { await tg(env, "answerCallbackQuery", { callback_query_id: cbId, text: sent.count ? L.dlPickOk : L.dlPickFail }); return; }
+  if (multi) {
+    if (!sent.count) {
+      const rows = dlRows(L, [e.item]);
+      await tg(env, "editMessageText", { chat_id: chatId, message_id: mid, text: L.dlLinkOnly, parse_mode: "HTML", reply_markup: rows.length ? { inline_keyboard: rows } : undefined });
+      await deleteLater(env, chatId, mid, dlMenuMs(env));
+    }
+    await tg(env, "answerCallbackQuery", { callback_query_id: cbId, text: sent.count ? L.dlPickOk : L.dlPickFail });
+    return;
+  }
   if (sent.count) {
     await tg(env, "editMessageText", { chat_id: chatId, message_id: mid, text: L.dlFileOk + " · " + L.dlDelNote, parse_mode: "HTML" });
     await deleteLater(env, chatId, mid, dlDelMs(env));
   } else {
-    await tg(env, "editMessageText", { chat_id: chatId, message_id: mid, text: L.dlLinkOnly, parse_mode: "HTML", reply_markup: { inline_keyboard: dlRows(L, [e.item]) } });
+    await tg(env, "editMessageText", { chat_id: chatId, message_id: mid, text: L.dlLinkOnly, parse_mode: "HTML", reply_markup: dlRows(L, [e.item]).length ? { inline_keyboard: dlRows(L, [e.item]) } : undefined });
     await deleteLater(env, chatId, mid, dlMenuMs(env));
   }
   await tg(env, "answerCallbackQuery", { callback_query_id: cbId });
@@ -523,10 +807,10 @@ export async function handleDl(env, msg, chatId) {
   const ph = await tg(env, "sendMessage", { chat_id: chatId, text: L.dlWorking, parse_mode: "HTML" });
   const phMid = ph && ph.ok && ph.result ? ph.result.message_id : 0;
   let res = null;
-  try { res = await dlResolve(env, url, plat); } catch (_) {}
+  try { res = await dlResolveHard(env, url, plat); } catch (_) {}
   const items = res && res.items ? res.items.slice(0, DL_MAX_LINKS) : [];
   if (!items.length) {
-    const failText = plat === "youtube" ? L.dlTimeout : (res && res.authdead ? L.dlIgAuth() : res && res.blocked ? L.dlIgBlocked() : L.dlFailRes(plat));
+    const failText = (res && res.hardTimeout) || plat === "youtube" ? L.dlTimeout : (res && res.authdead ? L.dlIgAuth() : res && res.blocked ? L.dlIgBlocked() : L.dlFailRes(plat));
     if (phMid) {
       await tg(env, "editMessageText", { chat_id: chatId, message_id: phMid, text: failText, parse_mode: "HTML" });
       await deleteLater(env, chatId, phMid, dlDelMs(env));
@@ -541,11 +825,12 @@ export async function handleDl(env, msg, chatId) {
   if (photos.length) {
     const ps = await dlSendFiles(env, chatId, photos, meta.title || "", L, url);
     photosDone = ps.count;
-    if (ps.rest.length) linkRows = dlRows(L, ps.rest);
+    linkRows = dlRows(L, photos); // v2.67.0: semua foto bawa Direct Link (urutan asli carousel) — tombol nyempil di konfirmasi/menu
   }
-  if (!va.length && !linkRows.length) {
+  if (!va.length) {
     const t = L.dlPhotosDone(photosDone);
-    if (phMid) await tg(env, "editMessageText", { chat_id: chatId, message_id: phMid, text: t, parse_mode: "HTML" });
+    const mk = (photos.length > 1 || photosDone < photos.length) && linkRows.length ? { inline_keyboard: linkRows } : undefined;
+    if (phMid) await tg(env, "editMessageText", { chat_id: chatId, message_id: phMid, text: t, parse_mode: "HTML", reply_markup: mk });
     return;
   }
   return dlMenuShow(env, chatId, L, phMid, plat, va, meta, photosDone, linkRows, url);
@@ -553,19 +838,26 @@ export async function handleDl(env, msg, chatId) {
 
 const hesc = s => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 async function kyioSongResolve(q) {
-  const j = await getJSONh(KYIO_BASE + "/api/v2/dl/yt-play?q=" + encodeURIComponent(q));
+  const j = await getJSONh(KYIO_BASE + "/api/v2/dl/yt-play?q=" + encodeURIComponent(q), 30000); // CF egress: kyio latency 4-20s — timeout default 15s sering matteh = biang kerok fail /song live (probe 22 Okt)
   const r = j && j.status === true && j.result;
   if (!r) return null;
+  // dual-shape: lama = audio/video absolut; baru 22 Okt = song{} + download.downloadURL RELATIF (proxy kyio = 200 audio/mpeg + content-length)
+  const sgn = s => { const u = String(s || ""); return u.startsWith("https://") ? u : u.startsWith("/") ? KYIO_BASE + u : ""; };
+  const d = r.download;
+  const au = sgn(r.audio) || sgn(typeof d === "string" ? d : d && d.downloadURL);
+  const vi = sgn(r.video);
   const items = [];
-  const au = String(r.audio || "");
-  const vi = String(r.video || "");
-  if (au.startsWith("https://")) items.push({ kind: "audio", url: au });
-  if (vi.startsWith("https://") && vi !== au) items.push({ kind: "video", url: vi });
-  const title = String(r.title || "").slice(0, 120);
+  if (au) items.push({ kind: "audio", url: au });
+  if (vi && vi !== au) items.push({ kind: "video", url: vi });
+  const sg = r.song || {};
+  const st = String(sg.title || sg.videoId || "");
+  const ar = String((sg.artist && sg.artist.name) || "");
+  const pre = ar && !st.toLowerCase().includes(ar.toLowerCase()) ? ar + " - " : ""; // kyio 22 Okt: song.title udah sering bawa "Artist - Judul" — jangan dobel
+  const title = String(r.title || pre + st).slice(0, 120);
   return items.length ? { items: items.slice(0, DL_MAX_LINKS), title } : null;
 }
 async function kyioSpotifyResolve(u) {
-  const j = await getJSONh(KYIO_BASE + "/api/v2/dl/spotify-sc?q=" + encodeURIComponent(u));
+  const j = await getJSONh(KYIO_BASE + "/api/v2/dl/spotify-sc?q=" + encodeURIComponent(u), 30000); // sama: kyio lambat dari CF egress
   const r = j && j.status === true && j.result;
   const d = r && r.download ? String(r.download) : "";
   if (!d.startsWith("https://")) return null;
@@ -615,4 +907,208 @@ export async function handleSpotify(env, msg, chatId) {
   let res = null;
   try { res = await musicCached(env, "spotify", q, () => kyioSpotifyResolve(q)); } catch (_) {}
   return musicReply(env, chatId, L, res, "spotify", q);
+}
+
+// ===== /yts — YouTube search (v2.68.8) =====
+// innertube youtubei/v1/search (WEB client, keyless) = JALAN dari CF egress (probe 22 Okt: 200 + 18-19 videoRenderer, metadata lengkap) — 1 call udah bawa durasi/views/published, gak perlu RYD/oEmbed di sini
+const parseViews = s => { const m = String(s || "").match(/([\d.,]+)\s*([KMB])?\s*view/i); if (!m) return 0; const n = parseFloat(String(m[1]).replace(/,/g, "")); if (!isFinite(n)) return 0; return Math.round(n * ({ K: 1e3, M: 1e6, B: 1e9 }[m[2] || ""] || 1)); };
+async function ytSearch(q) {
+  try {
+    const r = await fetch("https://www.youtube.com/youtubei/v1/search?prettyPrint=false", {
+      method: "POST",
+      headers: { "content-type": "application/json", "user-agent": UA, "accept-language": "en-US,en;q=0.9", origin: "https://www.youtube.com", referer: "https://www.youtube.com/" },
+      body: JSON.stringify({ context: { client: { clientName: "WEB", clientVersion: "2.20241126.01.00", hl: "en", gl: "US" } }, query: q.slice(0, 200) }),
+      signal: AbortSignal.timeout(15000)
+    });
+    if (!r.ok) return null;
+    const j = await r.json().catch(() => null);
+    const secs = ((((j || {}).contents || {}).twoColumnSearchResultsRenderer || {}).primaryContents || {}).sectionListRenderer || {};
+    const items = [];
+    for (const s of (secs.contents || [])) {
+      if (items.length >= YTS_MAX) break;
+      for (const is of (((s.itemSectionRenderer || {}).contents) || [])) {
+        const v = is.videoRenderer;
+        if (!v || !v.videoId || !v.title) continue;
+        const live = (v.badges || []).some(b => b && b.metadataBadgeRenderer && b.metadataBadgeRenderer.label === "LIVE");
+        items.push({ id: v.videoId, t: ((v.title.runs || [])[0] || {}).text || "", ch: (((v.ownerText || {}).runs || [])[0] || {}).text || "", dur: (v.lengthText && v.lengthText.simpleText) || (live ? "LIVE" : ""), views: parseViews(v.viewCountText && v.viewCountText.simpleText), pub: (v.publishedTimeText && v.publishedTimeText.simpleText) || "" });
+        if (items.length >= YTS_MAX) break;
+      }
+    }
+    return { items };
+  } catch (_) { return null; }
+}
+const ytsMetaLines = it => { const seg = []; if (it.ch) seg.push("   👤 " + hesc(String(it.ch).slice(0, 60))); if (it.dur) seg.push("   ⏱ " + hesc(String(it.dur).slice(0, 12))); if (it.views) seg.push("   👁 " + fmtViews(it.views)); if (it.pub) seg.push("   📅 " + hesc(String(it.pub).slice(0, 30))); return seg; };
+// v2.69.9: kirim gallery jadi album foto Telegram (sendMediaGroup 10/chunk) + auto-delete + simpan referensi
+async function nhAlbumDeliver(env, chatId, L, id, title, numPages, pages, ctrlMid) {
+  const CH = 10;
+  const mids = [];
+  const chunks = [];
+  for (let i = 0; i < pages.length; i += CH) chunks.push(pages.slice(i, i + CH));
+  const caps = title + (numPages ? " · " + numPages + " hal" : "");
+  for (let ci = 0; ci < chunks.length; ci++) {
+    const media = chunks[ci].map((p, i) => ({ type: "photo", media: p.url, caption: (ci === 0 && i === 0) ? caps : "" }));
+    const j = await tg(env, "sendMediaGroup", { chat_id: chatId, media });
+    if (j && j.ok && Array.isArray(j.result)) for (const m of j.result) if (m && m.message_id) mids.push(m.message_id);
+    if (ci < chunks.length - 1) await sleep(300);
+  }
+  const dlUrl = nhDl(env, id, "zip");
+  let ctrl = ctrlMid;
+  if (!ctrl) {
+    const tok = rndTok();
+    try { await putJSON(env, NH_SAVE_PREFIX + tok, { id, t: title.slice(0, 120), n: numPages }, env.DB ? { ttlMs: NH_AUTODEL_MS } : undefined); } catch (_) {}
+    const kb = [[{ text: L.nhSaveBtn, callback_data: "nhsave:" + tok }]].concat(dlUrl ? [[{ text: L.nhDlBtn, url: dlUrl }]] : []);
+    const cj = await tg(env, "sendMessage", { chat_id: chatId, text: L.nhAlbumCtrl(title, numPages), parse_mode: "HTML", reply_markup: { inline_keyboard: kb } });
+    ctrl = cj && cj.ok && cj.result ? cj.result.message_id : 0;
+  }
+  const ms = parseInt(env.NH_AUTODEL_MS || "", 10) || NH_AUTODEL_MS;
+  for (const mid of mids) scheduleDelete(env, chatId, mid, ms);
+  if (ctrl) scheduleDelete(env, chatId, ctrl, ms);
+  return { mids };
+}
+
+export async function handleNh(env, msg, chatId) {
+  const L = await uiLang(env);
+  const raw = (msg.text || "").replace(/^\/\S+\s*/, "").trim();
+  const [idRaw, fmtRaw] = raw.split(/\s+/);
+  const id = Number(idRaw);
+  if (!id || !Number.isInteger(id)) return reply(env, chatId, L.nhUsage);
+  const fmt = fmtRaw ? String(fmtRaw).toLowerCase() : "";
+  if (fmt && fmt !== "zip" && fmt !== "pdf" && fmt !== "scroll") return reply(env, chatId, L.nhBadFmt);
+  await tg(env, "sendChatAction", { chat_id: chatId, action: fmt ? "upload_document" : "upload_photo" });
+  let title = "NH #" + id, numPages = 0, pages = [];
+  try {
+    const meta = await nhMeta(env, id);
+    if (meta && meta.title) title = String(meta.title).slice(0, 110);
+    if (meta && meta.num_pages) numPages = meta.num_pages;
+    if (!fmt && meta && Array.isArray(meta.pages) && meta.pages.length) pages = meta.pages;
+  } catch (_) {}
+  // /nh tanpa format = WAJIB album foto (metadata Worker + foto CDN, 100% VPS-independent).
+  // Gak ada fallback diam-diam ke zip — kalau metadata gagal, kasih error jujur, bukan file VPS.
+  if (!fmt) {
+    if (pages.length) return nhAlbumDeliver(env, chatId, L, id, title, numPages, pages, 0);
+    return reply(env, chatId, "⚠️ Album gagal dibuka (metadata dari Worker tidak tersedia). Coba lagi, atau pakai <code>/nh " + id + " zip</code> buat file.");
+  }
+  const url = nhDl(env, id, fmt);
+  if (!url) return reply(env, chatId, L.nhCfg);
+  const j = await tg(env, "sendDocument", { chat_id: chatId, document: url, caption: title + (numPages ? " · " + numPages + " hal" : "") });
+  if (j && j.ok) return;
+  return reply(env, chatId, L.nhFail(url));
+}
+
+export async function handleNhSave(env, cbId, chatId, tok) {
+  const L = await uiLang(env);
+  const e = await getJSON(env, NH_SAVE_PREFIX + tok, null);
+  try { await env.KV.delete(NH_SAVE_PREFIX + tok); } catch (_) {}
+  if (!e || !e.id) { try { await tg(env, "answerCallbackQuery", { callback_query_id: cbId, text: "expired" }); } catch (_) {} return; }
+  const v = await getJSON(env, VAULT_CHAT_KEY, null);
+  if (!v || !v.id) { try { await tg(env, "answerCallbackQuery", { callback_query_id: cbId, text: L.nhSaveNoVault }); } catch (_) {} return; }
+  const meta = await nhMeta(env, e.id);
+  const pages = meta && Array.isArray(meta.pages) ? meta.pages : [];
+  const title = (meta && meta.title) ? String(meta.title).slice(0, 110) : (e.t || "NH #" + e.id);
+  if (!pages.length) { try { await tg(env, "answerCallbackQuery", { callback_query_id: cbId, text: "gak bisa ambil halaman" }); } catch (_) {} return; }
+  try { await tg(env, "answerCallbackQuery", { callback_query_id: cbId, text: "menyimpan " + pages.length + " hal ke vault…" }); } catch (_) {}
+  const CH = 10, chunks = [];
+  for (let i = 0; i < pages.length; i += CH) chunks.push(pages.slice(i, i + CH));
+  let firstFid = "", saved = 0;
+  for (let ci = 0; ci < chunks.length; ci++) {
+    const media = chunks[ci].map((p, i) => ({ type: "photo", media: p.url, caption: (ci === 0 && i === 0) ? (title + " · saved") : "" }));
+    const j = await tg(env, "sendMediaGroup", { chat_id: v.id, media });
+    if (j && j.ok && Array.isArray(j.result)) {
+      saved += j.result.length;
+      if (ci === 0 && j.result[0] && Array.isArray(j.result[0].photo)) firstFid = j.result[0].photo[j.result[0].photo.length - 1].file_id;
+    } else break;
+    if (ci < chunks.length - 1) await sleep(300);
+  }
+  if (saved) {
+    try {
+      const list = await getJSON(env, FILE_INDEX_KEY, []);
+      const id = list.reduce((a, x) => Math.max(a, x.id || 0), 0) + 1;
+      list.unshift({ id, name: title, fid: firstFid, kind: "photo", mime: "image/jpeg", size: 0, ts: Date.now(), nh: e.id, pages: saved });
+      await putJSON(env, FILE_INDEX_KEY, list);
+    } catch (_) {}
+    try {
+      const cur = JSON.parse(await env.KV.get(NH_SAVES_KEY) || "[]");
+      if (!cur.find((x) => String(x.id) === String(e.id))) cur.push({ id: e.id, t: e.t || title, n: e.n || pages.length, at: Date.now() });
+      await env.KV.put(NH_SAVES_KEY, JSON.stringify(cur.slice(-100)));
+    } catch (_) {}
+  }
+  try { await tg(env, "answerCallbackQuery", { callback_query_id: cbId, text: saved ? L.nhSaved + " ✓ (" + saved + " hal di vault)" : "gagal kirim ke vault" }); } catch (_) {}
+}
+
+export async function handleNhs(env, msg, chatId) {
+  const L = await uiLang(env);
+  let cur = []; try { cur = JSON.parse(await env.KV.get(NH_SAVES_KEY) || "[]"); } catch (_) {}
+  if (!cur.length) return reply(env, chatId, L.nhsEmpty);
+  const lines = [L.nhsHead(cur.length), ""];
+  const rows = [];
+  cur.slice(-20).reverse().forEach((x, i) => {
+    lines.push((i + 1) + ". <b>" + (x.t ? hesc(String(x.t).slice(0, 60)) : "NH #" + x.id) + "</b>");
+    const dl = nhDl(env, x.id, "zip"); rows.push(dl ? [{ text: L.nhsOpen, callback_data: "nhop:" + x.id }, { text: L.nhsDl, url: dl }] : [{ text: L.nhsOpen, callback_data: "nhop:" + x.id }]);
+  });
+  return tg(env, "sendMessage", { chat_id: chatId, text: lines.join("\n"), parse_mode: "HTML", reply_markup: { inline_keyboard: rows } });
+}
+
+export async function handleNhop(env, cbId, chatId, id) {
+  const L = await uiLang(env);
+  try {
+    await tg(env, "answerCallbackQuery", { callback_query_id: cbId, text: "🖼" });
+    await tg(env, "sendChatAction", { chat_id: chatId, action: "upload_photo" });
+    const meta = await nhMeta(env, id);
+    const pages = meta && Array.isArray(meta.pages) ? meta.pages : [];
+    if (!pages.length) { await tg(env, "answerCallbackQuery", { callback_query_id: cbId, text: "not found" }); return; }
+    const title = (meta && meta.title) ? String(meta.title).slice(0, 110) : "NH #" + id;
+    const n = meta && meta.num_pages ? meta.num_pages : 0;
+    return nhAlbumDeliver(env, chatId, L, id, title, n, pages, 0);
+  } catch (_) { try { await tg(env, "answerCallbackQuery", { callback_query_id: cbId, text: "L" }); } catch (_) {} }
+}
+
+export async function handleYts(env, msg, chatId) {
+  const L = await uiLang(env);
+  const q = (msg.text || "").replace(/^\/\S+\s*/, "").trim();
+  if (!q) return reply(env, chatId, L.ytsUsage);
+  await tg(env, "sendChatAction", { chat_id: chatId, action: "typing" });
+  let res = null;
+  try { res = await musicCached(env, "yts", q, () => ytSearch(q)); } catch (_) {}
+  if (!res) return reply(env, chatId, L.dlFailRes("YouTube search")); // sumber down — beda dari emang gak ada hasil
+  const items = (res.items || []).slice(0, YTS_MAX);
+  if (!items.length) return reply(env, chatId, L.ytsNone(hesc(q.slice(0, 80))));
+  const toks = [];
+  for (const it of items) {
+    const tok = rndTok();
+    toks.push(tok);
+    try { await putJSON(env, YT_PICK_PREFIX + tok, { c: chatId, u: "https://www.youtube.com/watch?v=" + it.id, t: String(it.t || "").slice(0, 120), ch: String(it.ch || "").slice(0, 60), v: it.views || 0, exp: Date.now() + DL_SAV_TTL_MS }, env.DB ? { ttlMs: DL_SAV_TTL_MS } : undefined); } catch (_) {}
+  }
+  const lines = [L.ytsHead(hesc(q.slice(0, 80))), ""];
+  for (let i = 0; i < items.length; i++) {
+    lines.push("<b>" + (i + 1) + ".</b> <a href=\"https://youtu.be/" + items[i].id + "\">" + hesc(String(items[i].t).slice(0, 120)) + "</a>");
+    lines.push(...ytsMetaLines(items[i]));
+    lines.push("");
+  }
+  lines.pop(); // buang blank terakhir — SEP nempel item terakhir, blank CUMA antar item (v2.68.9)
+  lines.push(SEP_LINE, L.ytsPick);
+  const kb = [items.map((_, i) => ({ text: String(i + 1), callback_data: "ytpick:" + toks[i] }))];
+  kb.push([{ text: L.ytsOpen, url: "https://www.youtube.com/results?search_query=" + encodeURIComponent(q) }]);
+  const j = await tg(env, "sendMessage", { chat_id: chatId, text: lines.join("\n"), parse_mode: "HTML", reply_markup: { inline_keyboard: kb } });
+  const mid = j && j.ok && j.result ? j.result.message_id : 0;
+  if (mid) await deleteLater(env, chatId, mid, dlMenuMs(env));
+}
+export async function handleYtsPick(env, cbId, chatId, mid, tok) {
+  const L = await uiLang(env);
+  const e = await getJSON(env, YT_PICK_PREFIX + tok, null);
+  try { await env.KV.delete(YT_PICK_PREFIX + tok); } catch (_) {}
+  if (!e || !e.u) { await tg(env, "answerCallbackQuery", { callback_query_id: cbId, text: L.dlExpired }); return; }
+  await tg(env, "answerCallbackQuery", { callback_query_id: cbId, text: L.popSearching });
+  await tg(env, "editMessageText", { chat_id: chatId, message_id: mid, text: L.dlWorking, parse_mode: "HTML" });
+  await tg(env, "sendChatAction", { chat_id: chatId, action: "typing" });
+  let res = null;
+  try { res = await dlResolveHard(env, e.u, "youtube"); } catch (_) {}
+  const items = res && res.items ? res.items.filter(x => x.kind !== "photo").slice(0, DL_MAX_LINKS) : [];
+  if (!items.length) {
+    await tg(env, "editMessageText", { chat_id: chatId, message_id: mid, text: L.dlTimeout, parse_mode: "HTML" });
+    await deleteLater(env, chatId, mid, dlDelMs(env));
+    return;
+  }
+  const meta = res.meta || {}; // v2.68.9: metadata hasil SEARCH di-merge — ytMeta (oEmbed/RYD/about) bisa gugel kalau resolve makan deadline 55s = menu polos (laporan owner 22 Okt)
+  const merged = { title: meta.title || e.t || "", author: meta.author || e.ch || "", views: meta.views || e.v || 0, likes: meta.likes || 0, dislikes: meta.dislikes || 0, duration: meta.duration || 0, subs: meta.subs || "" };
+  return dlMenuShow(env, chatId, L, mid, "youtube", items, merged, 0, [[{ text: L.ytsWatch, url: e.u }]], e.u);
 }

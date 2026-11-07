@@ -1,7 +1,7 @@
 import { getJSON, putJSON } from './base.js';
 import { ASK_KEY } from './consts.js';
 
-export const ASK_TTL_MS = 600000;
+const ASK_TTL_MS = 600000;
 
 export async function askSet(env, k, d) { await putJSON(env, ASK_KEY, { k, d: d || null, ts: Date.now() }); }
 

@@ -1,4 +1,4 @@
-import { tg, notify, getJSON, putJSON, esc, reply, mdTg, scheduleDelete } from "./base.js";
+import { tg, notify, getJSON, putJSON, esc, reply, mdTg, scheduleDelete, upstreamTmo } from "./base.js";
 import { uiLang, UI_SEP, UI } from "./ui.js";
 import { GAME_WORD_KEY, GAME_QUIZ_KEY, GAME_PVP_KEY, WORD_REWARDS, QUIZ_PTS, QUIZ_HIST_KEY, QUIZ_HIST_MAX, WIB, BET_MIN, BET_MAX, BET_RAKE, PVP_STAKE, GAME_LYRIC_KEY, LYRIC_PTS, LYRIC_POOL_MAX, GAME_SONG_KEY, GAME_FAN_KEY, SONG_PTS, SONG_FAN_PTS, SONG_TRY_MAX, GAME_SONG_STAT_KEY, GAME_FAN_STAT_KEY, SONG_STREAK_CAP, FAN_MIN_SONGS, FAN_MENU_MAX, LFM_USER_KEY, LFM_USER_DEFAULT, UA, DIVE_STATE_KEY, DIVE_PRAC_KEY, GAME_IDLE_REG, GAME_IDLE_MS } from "./consts.js";
 import { askSet, askClear } from "./ask.js";
@@ -7,7 +7,7 @@ import { chatStream } from "./feat-personal.js";
 import { stripThink } from "./ai.js";
 import { gameRecBump } from "./feat-aistats.js";
 
-export const WORDS_ID = [
+const WORDS_ID = [
   "agama", "aktif", "ambil", "badan", "bakar", "balik", "barat", "batas", "bawah", "bayar",
   "bayam", "bedak", "bekas", "belah", "belas", "benda", "beras", "besar", "beton", "bisik",
   "bocor", "bonus", "bukan", "bukit", "bulan", "bunga", "bunyi", "cabai", "cakap", "candi",
@@ -298,7 +298,7 @@ export const WORDS_EN = [
 ];
 export const WORDS = WORDS_ID;
 
-export const wordPool = L => (L === UI.id ? WORDS_ID : WORDS_EN);
+const wordPool = L => (L === UI.id ? WORDS_ID : WORDS_EN);
 export function gameWord(dayNum, pool) { const p = pool || WORDS_ID; return p[dayNum % p.length].toUpperCase(); }
 export function pvpWord(dayNum, pool) {
   const p = pool || WORDS_ID;
@@ -395,7 +395,7 @@ export async function gameWordStart(env, chatId, mid) {
   return editView(env, chatId, mid || st.mid, gameView(st, L));
 }
 
-export async function gameGuess(env, chatId, raw) {
+async function gameGuess(env, chatId, raw) {
   const L = await uiLang(env);
   const w = String(raw || "").trim().toUpperCase();
   const st = await getJSON(env, GAME_WORD_KEY + chatId, null);
@@ -565,7 +565,7 @@ const SYS_QUIZ = "You make a quick trivia mini-quiz for a casual chat user. Repl
 
 const QUIZ_TOPICS = ["geography", "science", "history", "language & words", "pop culture", "music", "movies & TV", "food & drinks", "animals & nature", "space", "sports & games", "technology", "mythology", "literature", "art", "the human body"];
 const QUIZ_ANGLES = ["unusual-but-learnable facts", "classic trivia everyone half-remembers", "everyday practical knowledge", "a wild mix of anything"];
-export function quizAskPrompt(hist) {
+function quizAskPrompt(hist) {
   const shuf = [...QUIZ_TOPICS].sort(() => Math.random() - 0.5).slice(0, 3).join(", ");
   const angle = QUIZ_ANGLES[Math.floor(Math.random() * QUIZ_ANGLES.length)];
   const av = (hist || []).slice(-QUIZ_HIST_MAX).map(q => "- " + q).join("\n");
@@ -680,7 +680,7 @@ async function lyricFetchReal(env, title, artist) {
   ];
   for (const u of urls) {
     try {
-      const r = await fetch(u, { headers: H });
+      const r = await fetch(u, { headers: H, signal: upstreamTmo(env) });
       if (!r.ok) continue;
       const j = await r.json();
       if (!Array.isArray(j)) continue;
@@ -694,7 +694,7 @@ async function lyricFetchReal(env, title, artist) {
 
   for (const m of ["https://lyricsplus.binimum.org", "https://lyricsplus.prjktla.my.id"]) {
     try {
-      const r = await fetch(m + "/v2/lyrics/get?title=" + encodeURIComponent(title) + "&artist=" + encodeURIComponent(artist), { headers: H });
+      const r = await fetch(m + "/v2/lyrics/get?title=" + encodeURIComponent(title) + "&artist=" + encodeURIComponent(artist), { headers: H, signal: upstreamTmo(env) });
       if (!r.ok) continue;
       const j = await r.json();
       if (!j || !Array.isArray(j.lyrics)) continue;
@@ -709,7 +709,7 @@ async function lyricFetchReal(env, title, artist) {
 async function lyricPoolRaw(env) {
   const user = (await env.KV.get(LFM_USER_KEY)) || env.LASTFM_USER || LFM_USER_DEFAULT;
   const get = async (period) => {
-    const r = await fetch("https://ws.audioscrobbler.com/2.0/?method=user.gettoptracks&format=json&limit=50&period=" + period + "&user=" + encodeURIComponent(user) + "&api_key=" + env.LASTFM_KEY, { headers: { "user-agent": UA } });
+    const r = await fetch("https://ws.audioscrobbler.com/2.0/?method=user.gettoptracks&format=json&limit=50&period=" + period + "&user=" + encodeURIComponent(user) + "&api_key=" + env.LASTFM_KEY, { headers: { "user-agent": UA }, signal: upstreamTmo(env) });
     if (!r.ok) return [];
     const j = await r.json();
     const arr = j && j.toptracks && Array.isArray(j.toptracks.track) ? j.toptracks.track : [];
@@ -783,11 +783,11 @@ export async function gameLyricPick(env, chatId, mid, k) {
   return editView(env, chatId, mid, lyricView(st, L));
 }
 
-async function dzPreview(title, artist) {
+async function dzPreview(env, title, artist) {
   const qs = [title + ' ' + artist, 'artist:"' + artist + '" track:"' + title + '"'];
   for (const q of qs) {
     try {
-      const r = await fetch("https://api.deezer.com/search?q=" + encodeURIComponent(q), { headers: { "user-agent": UA } });
+      const r = await fetch("https://api.deezer.com/search?q=" + encodeURIComponent(q), { headers: { "user-agent": UA }, signal: upstreamTmo(env) });
       if (!r.ok) continue;
       const j = await r.json();
       const d = j && Array.isArray(j.data) ? j.data : [];
@@ -811,7 +811,7 @@ export async function gameLeave(env, chatId) {
 
 async function snippetRedeliver(env, chatId, st, key, L) {
   if (!st || !st.song || !st.artist) return 0;
-  const pv = await dzPreview(st.song, st.artist);
+  const pv = await dzPreview(env, st.song, st.artist);
   if (!pv) return 0;
   const sa = await tg(env, "sendAudio", { chat_id: chatId, audio: pv, caption: L.songCap, parse_mode: "HTML" });
   if (!sa || !sa.ok) return 0;
@@ -852,7 +852,7 @@ export async function gameSongStart(env, chatId, mid) {
   let pick = null, preview = "", tried = 0;
   for (const c of shuf(pool).slice(0, SONG_TRY_MAX)) {
     tried++;
-    const pv = await dzPreview(c.t, c.a);
+    const pv = await dzPreview(env, c.t, c.a);
     if (pv) { pick = c; preview = pv; break; }
   }
   if (!pick) { await notify(env, chatId, L.songFail(tried)); return gameMenu(env, chatId, mid); }
@@ -897,7 +897,7 @@ async function songStreak(env, chatId, key, win, base) {
 async function fanTracks(env) {
   const user = (await env.KV.get(LFM_USER_KEY)) || env.LASTFM_USER || LFM_USER_DEFAULT;
   const get = async (period) => {
-    const r = await fetch("https://ws.audioscrobbler.com/2.0/?method=user.gettoptracks&format=json&limit=200&period=" + period + "&user=" + encodeURIComponent(user) + "&api_key=" + env.LASTFM_KEY, { headers: { "user-agent": UA } });
+    const r = await fetch("https://ws.audioscrobbler.com/2.0/?method=user.gettoptracks&format=json&limit=200&period=" + period + "&user=" + encodeURIComponent(user) + "&api_key=" + env.LASTFM_KEY, { headers: { "user-agent": UA }, signal: upstreamTmo(env) });
     if (!r.ok) return [];
     const j = await r.json();
     const arr = j && j.toptracks && Array.isArray(j.toptracks.track) ? j.toptracks.track : [];
@@ -959,7 +959,7 @@ export async function gameFanStart(env, chatId, mid, ai, name) {
   let pick = null, preview = "", tried = 0;
   for (const c of shuf(g.tr).slice(0, SONG_TRY_MAX)) {
     tried++;
-    const pv = await dzPreview(c.t, c.a);
+    const pv = await dzPreview(env, c.t, c.a);
     if (pv) { pick = c; preview = pv; break; }
   }
   if (!pick) { await notify(env, chatId, L.songFail(tried)); return gameFanMenu(env, chatId, mid); }
@@ -1015,7 +1015,9 @@ export async function gameIdleTick(env) {
       if (st.paused || !st.ts || now - st.ts <= GAME_IDLE_MS) continue;
       st.paused = 1;
       await putJSON(env, k + cid, st);
-      await reply(env, cid, L.sfPause);
+      // pesan cuma buat state yang BARU aja idle (5-15 mnt); state basi berhari-hari (sisa sesi lama yang
+      // kepotong restart dll) = pause senyap — dulu dia nebus pesan "idle 5 menit" begitu user nyentuh games lagi
+      if (now - st.ts <= GAME_IDLE_MS + 10 * 60 * 1000) await reply(env, cid, L.sfPause);
     }
     if (live) keep.push(cid);
   }

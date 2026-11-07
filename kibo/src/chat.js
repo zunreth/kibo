@@ -438,7 +438,7 @@ export async function chatTurn(env, chatId, text, histPre, userMid, replyMid) {
   return raw || "";
 }
 
-export async function slimHist(env, histFull) {
+async function slimHist(env, histFull) {
   try {
     const overflow = histFull.length - HIST_KEEP;
     if (overflow <= 0) return null;

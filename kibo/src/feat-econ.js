@@ -157,7 +157,7 @@ export async function gachaPull(env, chatId, mid, times) {
     if ((roll.tier === "common" || roll.tier === "rare") && g.pity >= GACHA_PITY) roll = { tier: "epic", charm: CHARM_EPIC[Math.floor(Math.random() * CHARM_EPIC.length)] };
     if (roll.charm) {
       ch.owned[roll.charm] = (ch.owned[roll.charm] || 0) + 1;
-      if (ch.eq.length < 3) ch.eq.push(roll.charm);
+      if (ch.eq.length < 3 && !ch.eq.includes(roll.charm)) ch.eq.push(roll.charm);
       if (roll.tier === "legend") { g.leg = (g.leg || 0) + 1; await addPts(env, GACHA_JACKPOT); cg["l" + roll.charm] = (cg["l" + roll.charm] || 0) + 1; } else cg["e" + roll.charm] = (cg["e" + roll.charm] || 0) + 1;
     } else {
       if (roll.item) { inv[roll.item] = (inv[roll.item] || 0) + 1; const gk = roll.tier + ":" + roll.item; grp[gk] = (grp[gk] || 0) + 1; }
@@ -294,7 +294,7 @@ export async function bmSave(env, msg, chatId, note) {
   await badgeCheck(env, chatId);
 }
 
-export async function econHubView(env, L) {
+async function econHubView(env, L) {
   const cid = await chatIdOf(env);
   const [q, g, ch, bd, inv] = await Promise.all([
     getJSON(env, "quest", {}), getJSON(env, EC_GACHA_KEY + cid, {}),

@@ -1,306 +1,340 @@
-[
- {
-  "command": "menu",
-  "description": "button panel (char/remind/rss/memory)"
- },
- {
-  "command": "settings",
-  "description": "settings hub: AI model, reply length, language"
- },
- {
-  "command": "aistats",
-  "description": "the AI's own stats: bonds, memory, game record, wrapped"
- },
- {
-  "command": "help",
-  "description": "help by category (or full list)"
- },
- {
-  "command": "reset",
-  "description": "new chat — wipe AI history"
- },
- {
-  "command": "profile",
-  "description": "your profile: level, streak, points, shields, crate"
- },
- {
-  "command": "shop",
-  "description": "point shop: buy gifts & items for your char (inventory)"
- },
- {
-  "command": "gacha",
-  "description": "point gacha: roll items + collectible charms (pity at 10)"
- },
- {
-  "command": "ach",
-  "description": "achievements: badges from streaks, wins & milestones"
- },
- {
-  "command": "bm",
-  "description": "reply to a message — save it to your vault with a note"
- },
- {
-  "command": "inv",
-  "description": "your inventory: items bought in /shop — use them here"
- },
- {
-  "command": "rewind",
-  "description": "reply to a char msg — rewind the chat to that point"
- },
- {
-  "command": "delete",
-  "description": "reply to a message — remove it from chat + AI context"
- },
- {
-  "command": "regenerate",
-  "description": "regen: drop the last AI reply, answer from scratch (emoji react on a bot msg also triggers)"
- },
- {
-  "command": "continue",
-  "description": "resume a reply cut by the runtime limit (⏱) from where it stopped"
- },
- {
-  "command": "abort",
-  "description": "stop the AI process that is still running (thinking too long)"
- },
- {
-  "command": "remember",
-  "description": "save a permanent fact about you"
- },
- {
-  "command": "mems",
-  "description": "view & delete memories"
- },
- {
-  "command": "forget",
-  "description": "delete a memory by id"
- },
- {
-  "command": "cmems",
-  "description": "active char memory (list/add/del)"
- },
- {
-  "command": "j",
-  "description": "write a journal entry"
- },
- {
-  "command": "digest",
-  "description": "journal digest for today"
- },
- {
-  "command": "remind",
-  "description": "set a reminder (2h | 21:30 | besok 09:00)"
- },
- {
-  "command": "reminds",
-  "description": "list active reminders"
- },
- {
-  "command": "del",
-  "description": "delete a reminder by id"
- },
- {
-  "command": "rss",
-  "description": "manage RSS feeds (add/list/del)"
- },
- {
-  "command": "char",
-  "description": "AI personas (add/list/off/import)"
- },
- {
-  "command": "presets",
-  "description": "SillyTavern style presets: enable/disable + import .json"
- },
- {
-  "command": "me",
-  "description": "your persona: name + personality for the AI"
- },
- {
-  "command": "otp",
-  "description": "emails from the last 10 minutes"
- },
- {
-  "command": "model",
-  "description": "switch the AI model (bridge/custom)"
- },
- {
-  "command": "len",
-  "description": "reply length: short/medium/long"
- },
- {
-  "command": "lang",
-  "description": "AI output language"
- },
- {
-  "command": "stats",
-  "description": "AI usage stats (tokens)"
- },
- {
-  "command": "sys",
-  "description": "system info: D1/KV, POP, quota, webhook, secrets"
- },
- {
-  "command": "vault",
-  "description": "vault: file manager + backup (private channel)"
- },
- {
-  "command": "save",
-  "description": "save a file — reply to a file/photo with /save"
- },
- {
-  "command": "files",
-  "description": "vault files (fetch/rename/delete)"
- },
- {
-  "command": "quest",
-  "description": "daily quest + streak & points"
- },
- {
-  "command": "ping",
-  "description": "check the bot is alive"
- },
- {
-  "command": "start",
-  "description": "start & pair the bot"
- },
- {
-  "command": "tts",
-  "description": "toggle AI voice-note replies"
- },
- {
-  "command": "totp",
-  "description": "live 2FA codes (RFC 6238)"
- },
- {
-  "command": "game",
-  "description": "point mini-games: Wordle + Quiz + Lyric + Song Guess"
- },
- {
-  "command": "dive",
-  "description": "Daily Dive: 7 daily prompts, rare answers score more"
- },
- {
-  "command": "anime",
-  "description": "look up anime info (Kitsu)"
- },
- {
-  "command": "manga",
-  "description": "look up manga info (Kitsu)"
- },
- {
-  "command": "weather",
-  "description": "current weather (first time: set city)"
- },
- {
-  "command": "np",
-  "description": "the song playing right now"
- },
- {
-  "command": "dl",
-  "description": "direct download links: TikTok / X / Instagram / YouTube (720p & MP3)"
- },
- {
-  "command": "song",
-  "description": "find a song by title: instant MP3 + video links"
- },
- {
-  "command": "spotify",
-  "description": "spotify track link → MP3"
- },
- {
-  "command": "bet",
-  "description": "coinflip points vs char (5–50)"
- },
- {
-  "command": "shield",
-  "description": "protect the quest streak (15 points)"
- },
- {
-  "command": "vibe",
-  "description": "char energy dial: serious/balanced/playful/custom"
- },
- {
-  "command": "outfit",
-  "description": "set the active char outfit (injected into the story)"
- },
- {
-  "command": "plot",
-  "description": "story tone direction (e.g. 60% romance 30% comedy)"
- },
- {
-  "command": "dice",
-  "description": "story dice: 3 random elements to kickstart RP"
- },
- {
-  "command": "ooc",
-  "description": "out of character: discuss the story (toggle)"
- },
- {
-  "command": "rpreset",
-  "description": "reset all RP knobs at once (vibe+outfit+plot)"
- },
- {
-  "command": "rp",
-  "description": "save/load the story state: slots & chapters"
- },
- {
-  "command": "scene",
-  "description": "two-char scene: reply to their message = they answer"
- },
- {
-  "command": "focus",
-  "description": "focus timer: /focus 25, claim /focus done (+5 pts, 10-min window)"
- },
- {
-  "command": "sleep",
-  "description": "sleep log: /sleep gn before bed, /sleep gm when you wake"
- },
- {
-  "command": "habit",
-  "description": "daily habits + streak: /habit add <name>, check in via button"
- },
- {
-  "command": "beli",
-  "description": "log an expense: /beli 25k <note> — /beli recap for the month"
- },
- {
-  "command": "capsule",
-  "description": "letter to future you: /capsule <time> <message> (same time format as /remind)"
- },
- {
-  "command": "rl",
-  "description": "reading list: view/list, /rl add <title>, tap to mark done or delete"
- },
- {
-  "command": "read",
-  "description": "add to reading list: /read <title>"
- },
- {
-  "command": "otd",
-  "description": "on-this-day: daily facts from Wikipedia (0 AI)"
- },
- {
-  "command": "shorten",
-  "description": "shorten: turn a long URL into /s/<code> (302 redirect)"
- },
- {
-  "command": "wrap",
-  "description": "music wrap: recap your Last.fm listening (1 AI, throttled)"
- },
- {
-  "command": "paste",
-  "description": "paste: save text & share a /p/<id> link (0 AI)"
- },
- {
-  "command": "countdown",
-  "description": "count down to a date: /countdown <name> <YYYY-MM-DD> (fires on the day)"
- },
- {
-  "command": "ama",
-  "description": "ask the character meta questions about itself/your story: /ama <question> (5-min cooldown)"
- },
- {
-  "command": "alarm",
-  "description": "morning alarm: your char says good morning every day at the time you pick: /alarm on [HH:MM] (default 08:00)"
- }
-]
+{
+ "commands": [
+  {
+   "command": "menu",
+   "description": "button panel (char/remind/rss/memory)"
+  },
+  {
+   "command": "settings",
+   "description": "settings hub: AI model, reply length, language"
+  },
+  {
+   "command": "aistats",
+   "description": "the AI stats: bonds, memory, game record, wrapped"
+  },
+  {
+   "command": "help",
+   "description": "help by category (or full list)"
+  },
+  {
+   "command": "reset",
+   "description": "new chat — wipe AI history"
+  },
+  {
+   "command": "profile",
+   "description": "your profile: level, streak, points, shields, crate"
+  },
+  {
+   "command": "shop",
+   "description": "point shop: buy gifts & items for your char (inventory)"
+  },
+  {
+   "command": "gacha",
+   "description": "point gacha: roll items + collectible charms (pity at 10)"
+  },
+  {
+   "command": "ach",
+   "description": "achievements: badges from streaks, wins & milestones"
+  },
+  {
+   "command": "bm",
+   "description": "reply to a message — save it to your vault with a note"
+  },
+  {
+   "command": "inv",
+   "description": "your inventory: items bought in /shop — use them here"
+  },
+  {
+   "command": "rewind",
+   "description": "reply to a char msg — rewind the chat to that point"
+  },
+  {
+   "command": "delete",
+   "description": "reply to a message — remove it from chat + AI context"
+  },
+  {
+   "command": "regenerate",
+   "description": "regen: drop the last AI reply, answer from scratch (emoji react on a bot msg also triggers)"
+  },
+  {
+   "command": "continue",
+   "description": "resume a reply cut by the runtime limit (⏱) from where it stopped"
+  },
+  {
+   "command": "abort",
+   "description": "stop the AI process that is still running (thinking too long)"
+  },
+  {
+   "command": "remember",
+   "description": "save a permanent fact about you"
+  },
+  {
+   "command": "mems",
+   "description": "view & delete memories"
+  },
+  {
+   "command": "forget",
+   "description": "delete a memory by id"
+  },
+  {
+   "command": "cmems",
+   "description": "active char memory (list/add/del)"
+  },
+  {
+   "command": "j",
+   "description": "write a journal entry"
+  },
+  {
+   "command": "digest",
+   "description": "journal digest for today"
+  },
+  {
+   "command": "remind",
+   "description": "set a reminder (2h | 21:30 | besok 09:00)"
+  },
+  {
+   "command": "reminds",
+   "description": "list active reminders"
+  },
+  {
+   "command": "del",
+   "description": "delete a reminder by id"
+  },
+  {
+   "command": "rss",
+   "description": "manage RSS feeds (add/list/del)"
+  },
+  {
+   "command": "char",
+   "description": "AI personas (add/list/off/import)"
+  },
+  {
+   "command": "presets",
+   "description": "SillyTavern style presets: enable/disable + import .json"
+  },
+  {
+   "command": "me",
+   "description": "your persona: name + personality for the AI"
+  },
+  {
+   "command": "otp",
+   "description": "emails from the last 10 minutes"
+  },
+  {
+   "command": "model",
+   "description": "switch the AI model (bridge/custom)"
+  },
+  {
+   "command": "len",
+   "description": "reply length: short/medium/long"
+  },
+  {
+   "command": "lang",
+   "description": "AI output language"
+  },
+  {
+   "command": "stats",
+   "description": "AI usage stats (tokens)"
+  },
+  {
+   "command": "sys",
+   "description": "system info: D1/KV, POP, quota, webhook, secrets"
+  },
+  {
+   "command": "vault",
+   "description": "vault: file manager + backup (private channel)"
+  },
+  {
+   "command": "save",
+   "description": "save a file — reply to a file/photo with /save"
+  },
+  {
+   "command": "files",
+   "description": "vault files (fetch/rename/delete)"
+  },
+  {
+   "command": "quest",
+   "description": "daily quest + streak & points"
+  },
+  {
+   "command": "ping",
+   "description": "check the bot is alive"
+  },
+  {
+   "command": "start",
+   "description": "start & pair the bot"
+  },
+  {
+   "command": "tts",
+   "description": "toggle AI voice-note replies"
+  },
+  {
+   "command": "totp",
+   "description": "live 2FA codes (RFC 6238)"
+  },
+  {
+   "command": "game",
+   "description": "point mini-games: Wordle + Quiz + Lyric + Song Guess"
+  },
+  {
+   "command": "dive",
+   "description": "Daily Dive: 7 daily prompts, rare answers score more"
+  },
+  {
+   "command": "anime",
+   "description": "look up anime info (Kitsu)"
+  },
+  {
+   "command": "manga",
+   "description": "look up manga info (Kitsu)"
+  },
+  {
+   "command": "weather",
+   "description": "current weather (first time: set city)"
+  },
+  {
+   "command": "np",
+   "description": "the song playing right now"
+  },
+  {
+   "command": "dl",
+   "description": "direct download links: TikTok / X / Instagram / YouTube (720p & MP3)"
+  },
+  {
+   "command": "song",
+   "description": "find a song by title: instant MP3 + video links"
+  },
+  {
+   "command": "spotify",
+   "description": "spotify track link → MP3"
+  },
+  {
+   "command": "yts",
+   "description": "search YouTube: numbered results → download menu"
+  },
+  {
+   "command": "nh",
+   "description": "nhentai gallery → photo album (foto tiap halaman, auto-hapus; /nh <id> zip|pdf|scroll untuk file)"
+  },
+  {
+   "command": "nhs",
+   "description": "list & open gallery nhentai yang disimpan (dari tombol 💾 album)"
+  },
+  {
+   "command": "host",
+   "description": "upload a photo/file to a file host (kappa, femboy, qu.ax, gofile…) → get a link"
+  },
+  {
+   "command": "sauce",
+   "description": "reverse image search: find the source of a photo (SauceNAO + Google Lens)"
+  },
+  {
+   "command": "cuaca",
+   "description": "cuaca sekarang (alias /weather; pertama kali: sebut kota)"
+  },
+  {
+   "command": "hn",
+   "description": "Hacker News front page (top 10, cache 30 menit)"
+  },
+  {
+   "command": "bet",
+   "description": "coinflip points vs char (5–50)"
+  },
+  {
+   "command": "shield",
+   "description": "protect the quest streak (15 points)"
+  },
+  {
+   "command": "vibe",
+   "description": "char energy dial: serious/balanced/playful/custom"
+  },
+  {
+   "command": "outfit",
+   "description": "set the active char outfit (injected into the story)"
+  },
+  {
+   "command": "plot",
+   "description": "story tone direction (e.g. 60% romance 30% comedy)"
+  },
+  {
+   "command": "dice",
+   "description": "story dice: 3 random elements to kickstart RP"
+  },
+  {
+   "command": "ooc",
+   "description": "out of character: discuss the story (toggle)"
+  },
+  {
+   "command": "rpreset",
+   "description": "reset all RP knobs at once (vibe+outfit+plot)"
+  },
+  {
+   "command": "rp",
+   "description": "save/load the story state: slots & chapters"
+  },
+  {
+   "command": "scene",
+   "description": "two-char scene: reply to their message = they answer"
+  },
+  {
+   "command": "focus",
+   "description": "focus timer: /focus 25, claim /focus done (+5 pts, 10-min window)"
+  },
+  {
+   "command": "sleep",
+   "description": "sleep log: /sleep gn before bed, /sleep gm when you wake"
+  },
+  {
+   "command": "habit",
+   "description": "daily habits + streak: /habit add <name>, check in via button"
+  },
+  {
+   "command": "beli",
+   "description": "log an expense: /beli 25k <note> — /beli recap for the month"
+  },
+  {
+   "command": "capsule",
+   "description": "letter to future you: /capsule <time> <message> (same time format as /remind)"
+  },
+  {
+   "command": "countdown",
+   "description": "count down to a date: /countdown <name> <YYYY-MM-DD> (fires on the day)"
+  },
+  {
+   "command": "ama",
+   "description": "ask the character meta questions about itself/your story: /ama <question> (5-min cooldown)"
+  },
+  {
+   "command": "alarm",
+   "description": "morning alarm: your char says good morning every day at the time you pick: /alarm on [HH:MM] (default 08:00)"
+  },
+  {
+   "command": "chain",
+   "description": "5-day quest arc: clear your daily quest to light each step (+5 pts); full clear = +50 pts bonus: /chain"
+  },
+  {
+   "command": "rl",
+   "description": "reading list: view/list, /rl add <title>, tap to mark done or delete"
+  },
+  {
+   "command": "read",
+   "description": "add to reading list: /read <title>"
+  },
+  {
+   "command": "otd",
+   "description": "on-this-day: daily facts from Wikipedia (0 AI)"
+  },
+  {
+   "command": "shorten",
+   "description": "shorten: turn a long URL into /s/<code> (302 redirect)"
+  },
+  {
+   "command": "wrap",
+   "description": "music wrap: recap your Last.fm listening (1 AI, throttled)"
+  },
+  {
+   "command": "paste",
+   "description": "paste: save text & share a /p/<id> link (0 AI)"
+  }
+ ]
+}

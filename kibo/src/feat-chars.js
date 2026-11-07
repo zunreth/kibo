@@ -471,7 +471,7 @@ export async function handleDocument(env, msg, chatId) {
   await notify(env, chatId, L.charImported(id, esc(name), esc((doc.file_name || "file").slice(0, 40))));
 }
 
-export function cardCapLine(prompt) {
+function cardCapLine(prompt) {
   const m = String(prompt || "").match(/Description:\s*([^\n]+)/);
   return (m ? m[1] : String(prompt || "").split("\n")[0]).slice(0, 200).trim();
 }

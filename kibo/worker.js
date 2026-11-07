@@ -111,7 +111,10 @@ import {
   flushStatsBuf,
   bumpCmd,
 } from './src/kv.js';
-import { wrapStore, d1Sweep } from './src/store-d1.js';
+import { wrapStore, d1Sweep, shadowSync } from './src/store-d1.js';
+import { handleNotify } from './src/feat-notify.js';
+import { handleDebug, handleDbgFlag, dbgLog, renderDebugView, renderLogView, setDebug, clearDbgRing, armStream } from './src/feat-debug.js';
+import { handleChain, chainStartCb, chainQuitCb, chainQuit2Cb, chainViewCb } from './src/feat-chain.js';
 import {
   UI,
   uiLang,
@@ -299,9 +302,11 @@ import {
 import { handleGame, gameIntercept, gameMenu, gameWordStart, gameStop, gameQuizStart, gameQuizPick, pvpStart, pvpStop, handleBet, gameLyricStart, gameLyricPick, gameSongStart, gameSongPick, gameFanMenu, gameFanStart, gameFanPick, gameFanAskOpen, gameFanAsk, gameFanAskCancel, gameIdleTick, gameLeave } from './src/feat-game.js';
 import { diveStart, diveSkip, diveStop, divePrac, diveModePick, diveIntercept, diveCronTick, divePreGen } from './src/feat-dive.js';
 import { handleShop, shopBuy, handleInv, invUse, handleGacha, gachaPull, handleCharms, charmEq, handleAch, bmSave, handleHub } from './src/feat-econ.js';
-import { rlAdd, rlView, rlToggle, rlDel, otdView, shortAdd, shortResolve, wrapView, pasteAdd, pasteGet } from './src/feat-b8.js';
+import { rlAdd, rlView, rlToggle, rlDel, otdView, shortAdd, shortResolve, wrapView, pasteAdd, pasteGet, handleHn } from './src/feat-b8.js';
 import { SHORT_KEY } from './src/consts.js';
-import { handleDl, handleSong, handleSpotify, dlPlatform, delQsweep, handleDlPick } from './src/feat-media.js';
+import { handleDl, handleSong, handleSpotify, dlPlatform, delQsweep, handleDlPick, handleYts, handleYtsPick, handleNh, handleNhSave, handleNhs, handleNhop } from './src/feat-media.js';
+import { handleSauceCmd, handleSaucePhoto } from './src/feat-sauce.js';
+import { handleHostCmd, handleHostPhoto, handleHostCb, handleHostCancel, hostTrack, hostLinkFind, handleHostFetch } from './src/feat-host.js';
 import { handleAnime, handleWx, handleNp } from './src/feat-ctx.js';
 import { renderVibeView, handleVibe, setVibe, clearKnobField, purgeKnobs, handleOutfit, handlePlot, handleDice, handleOoc, renderRpMenu, renderOutfitView, renderPlotView, handleRpReset, rpAsk } from './src/feat-rp.js';
 import { handleRp, handleScene, renderRpSavesView, rpSaveSlot, rpRestoreSlot, rpDelSlot, getScene } from './src/feat-story.js';
@@ -344,6 +349,8 @@ export default {
       if (t) return new Response(t, { headers: { "content-type": "text/plain; charset=utf-8" } });
       return new Response("not found", { status: 404 });
     }
+    if (url.pathname === "/notify") return handleNotify(request, env);
+    if (request.method === "GET" && url.pathname === "/dbg") return handleDbgFlag(request, env);
     if (request.method !== "POST" || !url.pathname.startsWith("/hook/")) {
       return new Response("not found", { status: 404 });
     }
@@ -364,14 +371,14 @@ export default {
     } finally { clearTimeout(toId); }
     if (isProbe) {
       for (const s of runEnv.__probe) if (s.mid) scheduleDelete(runEnv, s.chat, s.mid, parseInt(env.PROBE_DEL_MS || "", 10) || 15000);
-      return new Response(JSON.stringify({ ok: true, probe: true, sent: runEnv.__probe.length, out: runEnv.__probe.map(s => ({ method: s.method, mid: s.mid, text: s.text })) }), { headers: { "content-type": "application/json" } });
+      return new Response(JSON.stringify({ ok: true, probe: true, sent: runEnv.__probe.length, out: runEnv.__probe.map(s => s.fn ? { method: s.method, mid: s.mid, text: s.text, fn: s.fn } : { method: s.method, mid: s.mid, text: s.text }) }), { headers: { "content-type": "application/json" } });
     }
     return new Response("ok");
   },
   async scheduled(event, env, ctx) {
     setLiveCtx(ctx);
     try { if (!env.__kvw) { env.KV = wrapStore(env); env.__kvw = true; } } catch (_) {}
-    ctx.waitUntil(runCron(env).catch(e => onUpdErr(env, e)).then(() => Promise.all([flushStatsBuf(env), flushNukeBuf(env), d1Sweep(env), delQsweep(env), diveCronTick(env).catch(() => {}), divePreGen(env).catch(() => {}), gameIdleTick(env).catch(() => {})])));
+    ctx.waitUntil(runCron(env).catch(e => onUpdErr(env, e)).then(() => Promise.all([flushStatsBuf(env), flushNukeBuf(env), d1Sweep(env), shadowSync(env), delQsweep(env), diveCronTick(env).catch(() => {}), divePreGen(env).catch(() => {}), gameIdleTick(env).catch(() => {})])));
   }
 };
 
@@ -397,13 +404,17 @@ async function handleUpdate(update, env) {
 
   const text = (msg.text || "").trim();
   const cmd = (text.split(/\s+/)[0] || "").split("@")[0].toLowerCase();
-  if (cmd.startsWith("/")) bumpCmd(env, cmd);
+  if (cmd.startsWith("/")) { bumpCmd(env, cmd); dbgLog(env, "cmd", cmd); }
   if (cmd.startsWith("/") && cmd !== "/cancel") await env.KV.delete(VAULT_OP_KEY);
   if (await focusIntercept(env, chatId, cmd, text, msg.message_id)) return;
 
   if (msg.voice || msg.audio) return handleTranscribe(env, msg, chatId);
+  if (msg.photo || msg.document) await hostTrack(env, chatId, msg);
+  if (msg.photo && (msg.caption || "").trim().toLowerCase().startsWith("/sauce")) return handleSaucePhoto(env, msg, chatId);
+  if (msg.photo && (msg.caption || "").trim().toLowerCase().startsWith("/host")) return handleHostPhoto(env, msg, chatId);
   if (msg.photo) return handleCaption(env, msg, chatId);
   if (msg.document) return handleDocument(env, msg, chatId);
+  if (!cmd.startsWith("/") && text) { const hl = hostLinkFind(text); if (hl) return handleHostFetch(env, chatId, hl); }
 
   if (cmd === "/help") { const v = renderHelpMenu(await uiLang(env)); return tg(env, "sendMessage", { chat_id: chatId, text: v.text, parse_mode: "HTML", reply_markup: v.markup }); }
   if (cmd === "/start") return handleStart(env, msg, chatId);
@@ -449,11 +460,18 @@ async function handleUpdate(update, env) {
   if (cmd === "/dl") { await delCmd(env, chatId, msg.message_id); return handleDl(env, msg, chatId); }
   if (cmd === "/song") { await delCmd(env, chatId, msg.message_id); return handleSong(env, msg, chatId); }
   if (cmd === "/spotify") { await delCmd(env, chatId, msg.message_id); return handleSpotify(env, msg, chatId); }
+  if (cmd === "/yts") { await delCmd(env, chatId, msg.message_id); return handleYts(env, msg, chatId); }
+  if (cmd === "/nh") { await delCmd(env, chatId, msg.message_id); return handleNh(env, msg, chatId); }
+  if (cmd === "/nhs") return handleNhs(env, msg, chatId);
+  if (cmd === "/sauce") { await delCmd(env, chatId, msg.message_id); return handleSauceCmd(env, msg, chatId); }
+  if (cmd === "/host") { await delCmd(env, chatId, msg.message_id); return handleHostCmd(env, msg, chatId); }
   if (cmd === "/bet") return handleBet(env, msg, chatId);
   if (cmd === "/shield") return handleShield(env, msg, chatId);
   if (cmd === "/anime") return handleAnime(env, "anime", chatId, text.slice(cmd.length).trim());
   if (cmd === "/manga") return handleAnime(env, "manga", chatId, text.slice(cmd.length).trim());
   if (cmd === "/weather") return handleWx(env, msg, chatId, text.slice(cmd.length).trim());
+  if (cmd === "/cuaca") return handleWx(env, msg, chatId, text.slice(cmd.length).trim()); // alias
+  if (cmd === "/hn") return handleHn(env, chatId, text.slice(cmd.length).trim());
   if (cmd === "/np") return handleNp(env, chatId);
   if (cmd === "/focus") { await delCmd(env, chatId, msg.message_id); return handleFocus(env, msg, chatId); }
   if (cmd === "/sleep") { await delCmd(env, chatId, msg.message_id); return handleSleep(env, msg, chatId); }
@@ -468,6 +486,7 @@ async function handleUpdate(update, env) {
   if (cmd === "/countdown") return handleCountdown(env, msg, chatId);
   if (cmd === "/ama") return handleAma(env, msg, chatId);
   if (cmd === "/alarm") return handleAlarm(env, msg, chatId);
+  if (cmd === "/chain") return handleChain(env, msg, chatId);
   if (cmd === "/menu") return sendMenu(env, chatId);
   if (cmd === "/rl") { const rest = String(msg.text || "").slice(cmd.length).trim(); if (/^add\s+/i.test(rest)) return rlAdd(env, chatId, rest.replace(/^add\s+/i, "")); return rlView(env, chatId, 0); }
   if (cmd === "/read") return rlAdd(env, chatId, String(msg.text || "").slice(cmd.length).trim());
@@ -489,6 +508,7 @@ async function handleUpdate(update, env) {
   if (cmd === "/stats") { const v = await renderStatsView(env); return tg(env, "sendMessage", { chat_id: chatId, text: v.text, parse_mode: "HTML", reply_markup: v.markup }); }
   if (cmd === "/profile") { const v = await renderProfile(env); return tg(env, "sendMessage", { chat_id: chatId, text: v.text, parse_mode: "HTML", reply_markup: v.markup }); }
   if (cmd === "/sys") return handleSys(env, chatId);
+  if (cmd === "/debug") return handleDebug(env, msg, chatId);
   if (text) {
     fReact(env, chatId, msg.message_id, text).catch(() => {});
     const bare = text.trim();
@@ -510,6 +530,7 @@ async function handleCallback(env, cb) {
   const sep = (cb.data || "").indexOf(":");
   const act = sep < 0 ? cb.data : cb.data.slice(0, sep);
   const arg = sep < 0 ? "" : cb.data.slice(sep + 1);
+  dbgLog(env, "cb", act);
   const L = await uiLang(env);
   const pop = t => tg(env, "answerCallbackQuery", { callback_query_id: cb.id, text: t });
   const edit = async view => { if (mid) await tg(env, "editMessageText", { chat_id: chatId, message_id: mid, text: view.text, parse_mode: "HTML", reply_markup: view.markup }); };
@@ -630,6 +651,10 @@ async function handleCallback(env, cb) {
       const cards = await getJSON(env, CHAR_KEY, []);
       await edit(renderChars(cards, 0, L));
     }
+  } else if (act === "chain" && chatId) {
+    if (arg === "start" || arg === "quit" || arg === "quit2" || arg === "view") await pop("");
+    const p = arg === "start" ? await chainStartCb(env, chatId, mid, L) : arg === "quit" ? await chainQuitCb(env, chatId, mid, L) : arg === "quit2" ? await chainQuit2Cb(env, chatId, mid, L) : arg === "view" ? await chainViewCb(env, chatId, mid, L) : "";
+    if (p) await pop(p);
   } else if (act === "rpsave" && chatId) {
     const card = await getActiveCard(env);
     if (!card) { await pop(L.rpNoChar); return; }
@@ -682,6 +707,7 @@ async function handleCallback(env, cb) {
     else if (arg === "uilang") view = await renderUiLangView(env);
     else if (arg === "j") view = { text: L.jMsg, markup: { inline_keyboard: [[{ text: L.bDig, callback_data: "dig" }], [{ text: L.home, callback_data: "menu" }]] } };
     else if (arg === "cfg") view = await renderCfgView(env);
+    else if (arg === "dbg") view = await renderDebugView(env);
     else if (arg === "divecfg") view = await renderDiveCfg(env);
     else if (arg === "vault") view = await renderVault(env, L);
     else if (arg === "model") view = await renderModelView(env);
@@ -714,6 +740,16 @@ async function handleCallback(env, cb) {
     await edit(await renderDiveCfg(env));
   } else if (act === "dlpick" && chatId) {
     await handleDlPick(env, cb.id, chatId, mid, arg);
+  } else if (act === "ytpick" && chatId) {
+    await handleYtsPick(env, cb.id, chatId, mid, arg);
+  } else if (act === "nhsave" && chatId) {
+    await handleNhSave(env, cb.id, chatId, arg);
+  } else if (act === "nhop" && chatId) {
+    await handleNhop(env, cb.id, chatId, arg);
+  } else if (act === "hostp" && chatId) {
+    await handleHostCb(env, cb.id, chatId, mid, arg);
+  } else if (act === "hostcancel" && chatId) {
+    await handleHostCancel(env, cb.id, chatId, mid, arg);
   } else if (act === "dlsav" && chatId) {
     const r = await vaultArchiveDl(env, arg);
     await tg(env, "answerCallbackQuery", { callback_query_id: cb.id, text: r.ok ? L.savOk : r.noVault ? L.savNoVault : r.full ? L.vaultFull(FILE_MAX) : r.dup ? L.savDup : L.savLate });
@@ -728,6 +764,13 @@ async function handleCallback(env, cb) {
   } else if (act === "sys" && chatId) {
     await tg(env, "answerCallbackQuery", { callback_query_id: cb.id });
     await handleSys(env, chatId, mid);
+  } else if (act === "dbg" && chatId) {
+    if (arg === "on") { await setDebug(env, true); dbgLog(env, "dbg", "on"); await pop(L.dbgOnPop); }
+    else if (arg === "off") { await setDebug(env, false); await pop(L.dbgOffPop); }
+    else if (arg === "stream") { armStream(env); dbgLog(env, "dbg", "stream"); await pop(L.dbgStreamPop); }
+    else if (arg === "log" || /^log:\d+$/.test(arg)) { const nl = arg.split(":")[1] || "3"; await pop(""); await edit(await renderLogView(env, nl)); return; }
+    else { await pop(L.dbgCleared); clearDbgRing(); }
+    await edit(await renderDebugView(env));
   } else if (act === "mmodels" && chatId) {
     await pop(L.popSearching);
     const list = await listBridgeModels(env);

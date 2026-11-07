@@ -203,7 +203,7 @@ export async function rpCheckpointMaybe(env, card, histFull, turnTs) {
   } catch (_) {  }
 }
 
-export function splitSceneReply(raw, card, sc) {
+function splitSceneReply(raw, card, sc) {
   if (!raw || !sc || !card) return null;
   const sp = [
     { name: String(card.name || "").toLowerCase(), id: card.id },
