@@ -65,6 +65,7 @@ import {
   setLastCf,
   AUTO_DL_KEY,
   DIVE_DEF_KEY,
+  NH_DEF_KEY,
 } from './src/consts.js';
 import {
   esc,
@@ -260,6 +261,7 @@ import {
   renderLenView,
   renderLangView,
   renderCfgView,
+  renderNhDefView,
   renderDiveCfg,
   handleModel,
   handleLen,
@@ -304,7 +306,7 @@ import { diveStart, diveSkip, diveStop, divePrac, diveModePick, diveIntercept, d
 import { handleShop, shopBuy, handleInv, invUse, handleGacha, gachaPull, handleCharms, charmEq, handleAch, bmSave, handleHub } from './src/feat-econ.js';
 import { rlAdd, rlView, rlToggle, rlDel, otdView, shortAdd, shortResolve, wrapView, pasteAdd, pasteGet, handleHn } from './src/feat-b8.js';
 import { SHORT_KEY } from './src/consts.js';
-import { handleDl, handleSong, handleSpotify, dlPlatform, delQsweep, handleDlPick, handleYts, handleYtsPick, handleNh, handleNhSave, handleNhs, handleNhop, handleNhCb } from './src/feat-media.js';
+import { handleDl, handleSong, handleSpotify, dlPlatform, delQsweep, handleDlPick, handleYts, handleYtsPick, handleNh, handleNhSave, handleNhs, handleNhop, handleNhCb, nhLinkId, nhRun } from './src/feat-media.js';
 import { handleSauceCmd, handleSaucePhoto } from './src/feat-sauce.js';
 import { handleHostCmd, handleHostPhoto, handleHostCb, handleHostCancel, hostTrack, hostLinkFind, handleHostFetch } from './src/feat-host.js';
 import { handleAnime, handleWx, handleNp } from './src/feat-ctx.js';
@@ -514,6 +516,9 @@ async function handleUpdate(update, env) {
     fReact(env, chatId, msg.message_id, text).catch(() => {});
     const bare = text.trim();
     if (/^https?:\/\/\S+$/.test(bare) && dlPlatform(bare) && (await env.KV.get(AUTO_DL_KEY)) !== "off") { await delCmd(env, chatId, msg.message_id); return handleDl(env, msg, chatId); }
+    // v2.71.0: link nhentai / cin.guru yang ditempel = permintaan /nh (pakai format default)
+    const nhHit = nhLinkId(bare);
+    if (nhHit) { await delCmd(env, chatId, msg.message_id); return nhRun(env, chatId, nhHit.id, nhHit.fmt); }
     return handleText(env, msg, chatId);
   }
 }
@@ -708,6 +713,7 @@ async function handleCallback(env, cb) {
     else if (arg === "uilang") view = await renderUiLangView(env);
     else if (arg === "j") view = { text: L.jMsg, markup: { inline_keyboard: [[{ text: L.bDig, callback_data: "dig" }], [{ text: L.home, callback_data: "menu" }]] } };
     else if (arg === "cfg") view = await renderCfgView(env);
+    else if (arg === "nhdef") view = await renderNhDefView(env);
     else if (arg === "dbg") view = await renderDebugView(env);
     else if (arg === "divecfg") view = await renderDiveCfg(env);
     else if (arg === "vault") view = await renderVault(env, L);
@@ -733,6 +739,12 @@ async function handleCallback(env, cb) {
     await env.KV.put(AUTO_DL_KEY, cur ? "off" : "on");
     await tg(env, "answerCallbackQuery", { callback_query_id: cb.id, text: cur ? L.popAutoOff : L.popAutoOn });
     await edit(await renderCfgView(env));
+  } else if (act === "nhdef" && chatId) {
+    // v2.71.0: format default /nh (album|zip|pdf|scroll) — dipakai /nh tanpa format + link auto-detect
+    const k = ["album", "zip", "pdf", "scroll"].includes(arg) ? arg : "album";
+    await env.KV.put(NH_DEF_KEY, k);
+    await tg(env, "answerCallbackQuery", { callback_query_id: cb.id, text: L.nhDefPop(L.nhDefLbl(k)) });
+    await edit(await renderNhDefView(env));
   } else if (act === "dvset" && chatId) {
     const lbl = { chill: L.cfgDiveChill, normal: L.cfgDiveNormal, deep: L.cfgDiveDeep }[arg] || L.cfgDiveAskLbl;
     if (arg === "ask") await env.KV.delete(DIVE_DEF_KEY);

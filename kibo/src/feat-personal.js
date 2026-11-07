@@ -86,6 +86,7 @@ import {
   flushNukeBuf,
   nukeGone,
   nukeSleep,
+  nhDefFmt,
 } from './base.js';
 import { d1Stats, shadowInfo } from './store-d1.js';
 import {
@@ -977,9 +978,22 @@ export async function renderCfgView(env) {
       [{ text: L.cfgLang, callback_data: "nav:lang" }, { text: L.cfgUi, callback_data: "nav:uilang" }],
       [{ text: ttsOn ? L.cfgTtsOn : L.cfgTtsOff, callback_data: "ttsg" }],
       [{ text: adlOn ? L.cfgAutoOn : L.cfgAutoOff, callback_data: "autodlg" }],
+      [{ text: L.cfgNhDef(L.nhDefLbl(await nhDefFmt(env))), callback_data: "nav:nhdef" }],
       [{ text: L.cfgDiveBtn(dvShort), callback_data: "nav:divecfg" }],
       [{ text: L.cfgDbgBtn(dbgOn), callback_data: "nav:dbg" }],
       [{ text: L.home, callback_data: "menu" }]
+    ] }
+  };
+}
+
+export async function renderNhDefView(env) {
+  const L = await uiLang(env);
+  const cur = await nhDefFmt(env);
+  return {
+    text: L.nhDefTitle(L.nhDefLbl(cur)) + UI_SEP + L.nhDefNote,
+    markup: { inline_keyboard: [
+      ...["album", "zip", "pdf", "scroll"].map(k => [{ text: (k === cur ? "\u2705 " : "") + L.nhDefLbl(k), callback_data: "nhdef:" + k }]),
+      [{ text: L.back, callback_data: "nav:cfg" }, { text: L.home, callback_data: "menu" }]
     ] }
   };
 }

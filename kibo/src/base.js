@@ -47,6 +47,7 @@ import {
   VAULT_BIND_KEY,
   VAULT_REN_KEY,
   VAULT_OP_KEY,
+  NH_DEF_KEY,
   FILE_MAX,
   SNAP_MAX,
   ABORT_KEY,
@@ -126,10 +127,18 @@ export async function notify(env, chatId, text) {
   if (mid) scheduleDelete(env, chatId, mid);
   return j;
 }
-export function scheduleDelete(env, chatId, mid, ms) {
+// v2.71.0: format /nh — dipakai bareng /nh, link auto-detect, dan setting default
+export const NH_FMT_ALIAS = { album: "album", tl: "album", photo: "album", a: "album", zip: "zip", pdf: "pdf", scroll: "scroll" };
+export async function nhDefFmt(env) {
+  let v = "";
+  try { v = String((await env.KV.get(NH_DEF_KEY)) || "").trim().toLowerCase(); } catch (_) {}
+  return NH_FMT_ALIAS[v] || "album";
+}
+export function scheduleDelete(env, chatId, mid, ms, keepKey) {
   if (ms === undefined) ms = parseInt(env.NOTIFY_MS || "", 10) || 15000;
   const job = (async () => {
     await new Promise(r => setTimeout(r, ms));
+    if (keepKey) { try { if (await env.KV.get(keepKey)) return; } catch (_) {} }
     try { await tg(env, "deleteMessage", { chat_id: chatId, message_id: mid }); } catch (_) {}
   })();
   try { if (LIVE_CTX && LIVE_CTX.waitUntil) LIVE_CTX.waitUntil(job); } catch (_) {}
