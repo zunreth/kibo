@@ -304,7 +304,7 @@ import { diveStart, diveSkip, diveStop, divePrac, diveModePick, diveIntercept, d
 import { handleShop, shopBuy, handleInv, invUse, handleGacha, gachaPull, handleCharms, charmEq, handleAch, bmSave, handleHub } from './src/feat-econ.js';
 import { rlAdd, rlView, rlToggle, rlDel, otdView, shortAdd, shortResolve, wrapView, pasteAdd, pasteGet, handleHn } from './src/feat-b8.js';
 import { SHORT_KEY } from './src/consts.js';
-import { handleDl, handleSong, handleSpotify, dlPlatform, delQsweep, handleDlPick, handleYts, handleYtsPick, handleNh, handleNhSave, handleNhs, handleNhop } from './src/feat-media.js';
+import { handleDl, handleSong, handleSpotify, dlPlatform, delQsweep, handleDlPick, handleYts, handleYtsPick, handleNh, handleNhSave, handleNhs, handleNhop, handleNhCb } from './src/feat-media.js';
 import { handleSauceCmd, handleSaucePhoto } from './src/feat-sauce.js';
 import { handleHostCmd, handleHostPhoto, handleHostCb, handleHostCancel, hostTrack, hostLinkFind, handleHostFetch } from './src/feat-host.js';
 import { handleAnime, handleWx, handleNp } from './src/feat-ctx.js';
@@ -350,6 +350,7 @@ export default {
       return new Response("not found", { status: 404 });
     }
     if (url.pathname === "/notify") return handleNotify(request, env);
+    if (request.method === "POST" && url.pathname === "/nhcb") return handleNhCb(request, env); // v2.70.4: callback GHA builder zip
     if (request.method === "GET" && url.pathname === "/dbg") return handleDbgFlag(request, env);
     if (request.method !== "POST" || !url.pathname.startsWith("/hook/")) {
       return new Response("not found", { status: 404 });

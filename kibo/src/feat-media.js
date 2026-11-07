@@ -1,6 +1,6 @@
 import { tg, reply, getJSON, putJSON, scheduleDelete, tgErrLog } from "./base.js";
 import { uiLang, SEP_LINE } from "./ui.js";
-import { UA, UA_BOT, DL_CACHE_PREFIX, DL_CACHE_TTL_MS, DL_POLL_MS, DL_POLL_MAX, DL_MAX_LINKS, DL_YT_FORMATS, DL_SEND_MAX, DL_URL_SEND_MAX, DL_SEND_PHOTO_MAX, FGSI_IG_URL, FGSI_KEY, KYIO_BASE, DL_DEL_MS, DELQ_KEY, DL_MENU_TTL_MS, DL_PICK_PREFIX, DL_SAV_PREFIX, DL_SAV_TTL_MS, DL_BIG_PREFIX, YT_PICK_PREFIX, YTS_MAX, NH_SAVE_PREFIX, NH_SAVES_KEY, NH_AUTODEL_MS, VAULT_CHAT_KEY, FILE_INDEX_KEY } from "./consts.js";
+import { UA, UA_BOT, DL_CACHE_PREFIX, DL_CACHE_TTL_MS, DL_POLL_MS, DL_POLL_MAX, DL_MAX_LINKS, DL_YT_FORMATS, DL_SEND_MAX, DL_URL_SEND_MAX, DL_SEND_PHOTO_MAX, FGSI_IG_URL, FGSI_KEY, KYIO_BASE, DL_DEL_MS, DELQ_KEY, DL_MENU_TTL_MS, DL_PICK_PREFIX, DL_SAV_PREFIX, DL_SAV_TTL_MS, DL_BIG_PREFIX, YT_PICK_PREFIX, YTS_MAX, NH_SAVE_PREFIX, NH_SAVES_KEY, NH_AUTODEL_MS, NH_JOB_PREFIX, NH_JOB_TTL_MS, NH_BUSY_PREFIX, VAULT_CHAT_KEY, FILE_INDEX_KEY } from "./consts.js";
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
@@ -989,10 +989,74 @@ export async function handleNh(env, msg, chatId) {
     return reply(env, chatId, "⚠️ Album gagal dibuka (metadata dari Worker tidak tersedia). Coba lagi, atau pakai <code>/nh " + id + " zip</code> buat file.");
   }
   const url = nhDl(env, id, fmt);
-  if (!url) return reply(env, chatId, L.nhCfg);
-  const j = await tg(env, "sendDocument", { chat_id: chatId, document: url, caption: title + (numPages ? " · " + numPages + " hal" : "") });
-  if (j && j.ok) return;
-  return reply(env, chatId, L.nhFail(url));
+  if (url) {
+    const j = await tg(env, "sendDocument", { chat_id: chatId, document: url, caption: title + (numPages ? " · " + numPages + " hal" : "") });
+    if (j && j.ok) return;
+    return reply(env, chatId, L.nhFail(url));
+  }
+  // v2.70.4: tanpa NH_DL (VPS mati) tapi GH_DISPATCH ada → zip lewat GitHub Actions builder (async)
+  if (env.GH_DISPATCH && env.NH_API) return nhBuilderGo(env, chatId, L, id, fmt);
+  return reply(env, chatId, L.nhCfg);
+}
+
+// v2.70.4: async zip builder lewat GitHub Actions (VPS-independent) — job key KV sekali pakai + repository_dispatch
+async function nhBuilderGo(env, chatId, L, id, fmt) {
+  // v2.70.5: anti-dobel — id+fmt sama dari chat yang sama masih berjalan → tolak (busy key TTL = TTL job)
+  const busyKey = NH_BUSY_PREFIX + chatId + ":" + id + ":" + fmt;
+  let busy = null;
+  try { busy = await getJSON(env, busyKey, null); } catch (_) {}
+  if (busy && busy.tok) return reply(env, chatId, L.nhBusy);
+  const tok = rndTok();
+  try { await putJSON(env, NH_JOB_PREFIX + tok, { id, fmt, chat: chatId }, env.DB ? { ttlMs: NH_JOB_TTL_MS } : undefined); } catch (_) {}
+  try { await putJSON(env, busyKey, { tok, id, fmt, chat: chatId }, env.DB ? { ttlMs: NH_JOB_TTL_MS } : undefined); } catch (_) {}
+  const repo = String(env.NHBUILD_REPO || "ruqes/nhzip");
+  const meta = String(env.NH_API || "").replace(/\/+$/, "");
+  const cb = String(env.SELF_BASE || "").replace(/\/+$/, "") + "/nhcb";
+  await reply(env, chatId, L.nhZipWait);
+  try {
+    const r = await fetch("https://api.github.com/repos/" + repo + "/dispatches", {
+      method: "POST",
+      headers: { authorization: "Bearer " + env.GH_DISPATCH, accept: "application/vnd.github+json", "content-type": "application/json", "user-agent": "kibo" },
+      body: JSON.stringify({ event_type: "nh", client_payload: { id: String(id), fmt, meta, cb, tok } }),
+      signal: AbortSignal.timeout(15000)
+    });
+    if (!r.ok) throw new Error("github " + r.status);
+  } catch (e) {
+    try { await env.KV.delete(NH_JOB_PREFIX + tok); } catch (_) {}
+    try { await env.KV.delete(busyKey); } catch (_) {}
+    return reply(env, chatId, L.nhBuilderFail("dispatch " + String((e && e.message) || e).slice(0, 120)));
+  }
+  return "";
+}
+
+// v2.70.4: callback dari GHA builder — {tok, url} sukses / {tok, err} gagal; job key sekali pakai
+export async function handleNhCb(request, env) {
+  const jr = (st, o) => new Response(JSON.stringify(o), { status: st, headers: { "content-type": "application/json" } });
+  let body = {};
+  try { body = await request.json(); } catch (_) { return jr(400, { ok: false, err: "bad json" }); }
+  const tok = String(body.tok || "").slice(0, 64);
+  const job = tok ? await getJSON(env, NH_JOB_PREFIX + tok, null) : null;
+  try { if (tok) await env.KV.delete(NH_JOB_PREFIX + tok); } catch (_) {}
+  if (!job || !job.chat) return jr(404, { ok: false, err: "job tak dikenal / expired" });
+  // v2.70.5: busy key dilepas pas callback masuk (sukses ATAU gagal) — boleh build lagi
+  try { await env.KV.delete(NH_BUSY_PREFIX + job.chat + ":" + job.id + ":" + job.fmt); } catch (_) {}
+  const L = await uiLang(env);
+  if (body.err) {
+    await reply(env, job.chat, L.nhBuilderFail(String(body.err).slice(0, 300)));
+    return jr(200, { ok: true });
+  }
+  const url = String(body.url || "").trim().slice(0, 500);
+  if (!/^https:\/\/\S+$/.test(url)) return jr(400, { ok: false, err: "url gak valid" });
+  const cap = "<b>📦 NH " + hesc(job.id) + "</b> (" + hesc(String(body.fmt || job.fmt || "zip").slice(0, 12)) + (body.pages ? " · " + hesc(String(body.pages).slice(0, 6)) + " hal" : "") + ") " + (body.title ? "— " + hesc(String(body.title).slice(0, 90)) : "");
+  // Raw URL (uguu/kappa) → kirim FILE-nya dulu (UX lama /nh zip); kalau TG nolak (HTML/gede) → pesan link + Open
+  const dj = await tg(env, "sendDocument", { chat_id: job.chat, document: url, caption: cap, parse_mode: "HTML" });
+  let mid = dj && dj.ok && dj.result ? dj.result.message_id : 0;
+  if (!mid) {
+    const j = await tg(env, "sendMessage", { chat_id: job.chat, text: cap + "\n" + url, parse_mode: "HTML", reply_markup: { inline_keyboard: [[{ text: L.nhDlBtn, url }]] } });
+    mid = j && j.ok && j.result ? j.result.message_id : 0;
+  }
+  if (mid) await deleteLater(env, job.chat, mid, 600000);
+  return jr(200, { ok: true });
 }
 
 export async function handleNhSave(env, cbId, chatId, tok) {
