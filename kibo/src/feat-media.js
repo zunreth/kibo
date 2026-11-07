@@ -1,6 +1,6 @@
-import { tg, reply, getJSON, putJSON, scheduleDelete, tgErrLog, NH_FMT_ALIAS, nhDefFmt, nhHost } from "./base.js";
+import { tg, reply, getJSON, putJSON, scheduleDelete, tgErrLog, NH_FMT_ALIAS, nhDefFmt, nhHost, nhPdfQ } from "./base.js";
 import { uiLang, SEP_LINE } from "./ui.js";
-import { UA, UA_BOT, DL_CACHE_PREFIX, DL_CACHE_TTL_MS, DL_POLL_MS, DL_POLL_MAX, DL_MAX_LINKS, DL_YT_FORMATS, DL_SEND_MAX, DL_URL_SEND_MAX, DL_SEND_PHOTO_MAX, FGSI_IG_URL, FGSI_KEY, KYIO_BASE, DL_DEL_MS, DELQ_KEY, DL_MENU_TTL_MS, DL_PICK_PREFIX, DL_SAV_PREFIX, DL_SAV_TTL_MS, DL_BIG_PREFIX, YT_PICK_PREFIX, YTS_MAX, NH_SAVE_PREFIX, NH_SAVES_KEY, NH_AUTODEL_MS, NH_JOB_PREFIX, NH_JOB_TTL_MS, NH_BUSY_PREFIX, NH_KEEP_PREFIX, VAULT_CHAT_KEY, FILE_INDEX_KEY } from "./consts.js";
+import { UA, UA_BOT, DL_CACHE_PREFIX, DL_CACHE_TTL_MS, DL_POLL_MS, DL_POLL_MAX, DL_MAX_LINKS, DL_YT_FORMATS, DL_SEND_MAX, DL_URL_SEND_MAX, DL_SEND_PHOTO_MAX, FGSI_IG_URL, FGSI_KEY, KYIO_BASE, DL_DEL_MS, DELQ_KEY, DL_MENU_TTL_MS, DL_PICK_PREFIX, DL_SAV_PREFIX, DL_SAV_TTL_MS, DL_BIG_PREFIX, YT_PICK_PREFIX, YTS_MAX, NH_SAVE_PREFIX, NH_SAVES_KEY, NH_AUTODEL_MS, NH_JOB_PREFIX, NH_JOB_TTL_MS, NH_BUSY_PREFIX, NH_KEEP_PREFIX, NH_CACHE_PREFIX, NH_CACHE_TTL_MS, NH_CACHE_TTL_TMP_MS, NH_STAT_PREFIX, NH_STAT_TTL_MS, NH_DEAD_MS, VAULT_CHAT_KEY, FILE_INDEX_KEY } from "./consts.js";
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
@@ -949,10 +949,27 @@ async function nhAlbumDeliver(env, chatId, L, id, title, numPages, pages, ctrlMi
   const chunks = [];
   for (let i = 0; i < pages.length; i += CH) chunks.push(pages.slice(i, i + CH));
   const caps = title + (numPages ? " · " + numPages + " hal" : "");
+  // v2.73.0: satu chunk gagal (misal 1 URL 404) jangan buang 10 halaman — retry sekali, lalu fallback satu-satu
+  let failed = 0;
   for (let ci = 0; ci < chunks.length; ci++) {
     const media = chunks[ci].map((p, i) => ({ type: "photo", media: p.url, caption: (ci === 0 && i === 0) ? caps : "" }));
-    const j = await tg(env, "sendMediaGroup", { chat_id: chatId, media });
-    if (j && j.ok && Array.isArray(j.result)) for (const m of j.result) if (m && m.message_id) mids.push(m.message_id);
+    let got = null;
+    for (let a = 0; a < 2 && !got; a++) {
+      const j = await tg(env, "sendMediaGroup", { chat_id: chatId, media });
+      if (j && j.ok && Array.isArray(j.result)) got = j.result;
+      else if (!a) await sleep(400);
+    }
+    if (got) {
+      for (const m of got) if (m && m.message_id) mids.push(m.message_id);
+    } else {
+      for (let i = 0; i < chunks[ci].length; i++) {
+        const p = chunks[ci][i];
+        const j = await tg(env, "sendPhoto", { chat_id: chatId, photo: p.url, caption: (ci === 0 && i === 0) ? caps : undefined });
+        if (j && j.ok && j.result && j.result.message_id) mids.push(j.result.message_id);
+        else failed++;
+        if (i < chunks[ci].length - 1) await sleep(120);
+      }
+    }
     if (ci < chunks.length - 1) await sleep(300);
   }
   const dlUrl = nhDl(env, id, "zip");
@@ -960,8 +977,9 @@ async function nhAlbumDeliver(env, chatId, L, id, title, numPages, pages, ctrlMi
   if (!ctrl) {
     const tok = rndTok();
     try { await putJSON(env, NH_SAVE_PREFIX + tok, { id, t: title.slice(0, 120), n: numPages }, env.DB ? { ttlMs: NH_AUTODEL_MS } : undefined); } catch (_) {}
-    const kb = [[{ text: L.nhSaveBtn, callback_data: "nhsave:" + tok }]].concat(dlUrl ? [[{ text: L.nhDlBtn, url: dlUrl }]] : []);
-    const cj = await tg(env, "sendMessage", { chat_id: chatId, text: L.nhAlbumCtrl(title, numPages), parse_mode: "HTML", reply_markup: { inline_keyboard: kb } });
+    const kb = [[{ text: L.nhSaveBtn, callback_data: "nhsave:" + tok }, { text: L.nhsZip, callback_data: "nhnz:" + id }]].concat(dlUrl ? [[{ text: L.nhDlBtn, url: dlUrl }]] : []);
+    const txt = L.nhAlbumCtrl(title, numPages) + (failed ? "\n" + L.nhAlbumFail(failed) : "");
+    const cj = await tg(env, "sendMessage", { chat_id: chatId, text: txt, parse_mode: "HTML", reply_markup: { inline_keyboard: kb } });
     ctrl = cj && cj.ok && cj.result ? cj.result.message_id : 0;
   }
   const ms = parseInt(env.NH_AUTODEL_MS || "", 10) || NH_AUTODEL_MS;
@@ -972,8 +990,8 @@ async function nhAlbumDeliver(env, chatId, L, id, title, numPages, pages, ctrlMi
 
 export async function handleNh(env, msg, chatId) {
   const raw = (msg.text || "").replace(/^\/\S+\s*/, "").trim();
-  const [idRaw, fmtRaw] = raw.split(/\s+/);
-  return nhRun(env, chatId, idRaw, fmtRaw);
+  const parts = raw.split(/\s+/);
+  return nhRun(env, chatId, parts[0], parts[1], parts[2]);
 }
 
 // v2.71.0: link NH yang ditempel di chat (bukan command) → {id, fmt} atau null.
@@ -989,11 +1007,16 @@ export function nhLinkId(text) {
 }
 
 // v2.71.0: satu pintu buat /nh manual, link auto-detect, dan format default dari /settings
-export async function nhRun(env, chatId, idRaw, fmtRaw) {
+export async function nhRun(env, chatId, idRaw, fmtRaw, extraRaw) {
   const L = await uiLang(env);
   const id = Number(String(idRaw || "").trim());
   if (!id || !Number.isInteger(id)) return reply(env, chatId, L.nhUsage);
-  const fmtIn = String(fmtRaw || "").trim().toLowerCase();
+  // v2.73.0: "refresh" (posisi format atau setelahnya) = buang cache & build ulang
+  const freshRe = /^(refresh|fresh|rebuild|ulang)$/;
+  let fmtIn = String(fmtRaw || "").trim().toLowerCase();
+  let fresh = false;
+  if (freshRe.test(fmtIn)) { fresh = true; fmtIn = ""; }
+  if (freshRe.test(String(extraRaw || "").trim().toLowerCase())) fresh = true;
   let fmt = "";
   if (fmtIn) { fmt = NH_FMT_ALIAS[fmtIn] || ""; if (!fmt) return reply(env, chatId, L.nhBadFmt); }
   if (!fmt) fmt = await nhDefFmt(env); // default dari /settings → album kalau belum pernah diset
@@ -1009,6 +1032,12 @@ export async function nhRun(env, chatId, idRaw, fmtRaw) {
     if (pages.length) return nhAlbumDeliver(env, chatId, L, id, title, numPages, pages, 0);
     return reply(env, chatId, "⚠️ Album gagal dibuka (metadata dari Worker tidak tersedia). Coba lagi, atau pakai <code>/nh " + id + " zip</code> buat file.");
   }
+  // v2.73.0: cache — id+fmt yang sama udah pernah dibikin → kirim langsung, gak dispatch GHA
+  if (fresh) await nhCacheDrop(env, id, fmt);
+  else {
+    const hit = await nhCacheGet(env, id, fmt);
+    if (hit) return nhCacheDeliver(env, chatId, L, id, fmt, hit);
+  }
   const url = nhDl(env, id, fmt);
   if (url) {
     const j = await tg(env, "sendDocument", { chat_id: chatId, document: url, caption: title + (numPages ? " · " + numPages + " hal" : "") });
@@ -1018,6 +1047,113 @@ export async function nhRun(env, chatId, idRaw, fmtRaw) {
   // v2.70.4: tanpa NH_DL (VPS mati) tapi GH_DISPATCH ada → zip lewat GitHub Actions builder (async)
   if (env.GH_DISPATCH && env.NH_API) return nhBuilderGo(env, chatId, L, id, fmt);
   return reply(env, chatId, L.nhCfg);
+}
+
+// ===== v2.73.0: cache build, counter, watchdog =====
+// cache: id+fmt yang udah pernah dibuild → kirim langsung, gak perlu dispatch GHA lagi
+async function nhCacheGet(env, id, fmt) {
+  if (!id || !fmt || fmt === "album") return null;
+  const k = NH_CACHE_PREFIX + id + ":" + fmt;
+  let e = null;
+  try { e = await getJSON(env, k, null); } catch (_) { return null; }
+  if (!e || !e.u || !/^https:\/\//.test(String(e.u))) return null;
+  const ttl = Number(e.ttl) || NH_CACHE_TTL_MS;
+  if (e.ts && Date.now() - Number(e.ts) > ttl) {
+    try { await env.KV.delete(k); } catch (_) {}
+    return null;
+  }
+  return e;
+}
+async function nhCachePut(env, id, fmt, o) {
+  if (!id || !fmt || fmt === "album") return;
+  const u = String((o && o.u) || "");
+  if (!/^https:\/\/\S+$/.test(u)) return;
+  const host = String((o && o.host) || "").toLowerCase();
+  // provider permanen boleh di-cache lama; host auto-expire cuma sebentar (link bisa mati)
+  // builder ngirim nama host penuh ("kappa.lol"/"x0.at"), jadi dicocokin per prefix
+  const ttl = /^kappa/.test(host) ? NH_CACHE_TTL_MS : NH_CACHE_TTL_TMP_MS;
+  const e = { u, host, t: String((o && o.t) || "").slice(0, 110), n: Number((o && o.n) || 0) || 0, mb: Math.round((Number((o && o.mb) || 0)) * 10) / 10, ts: Date.now(), ttl };
+  try { await putJSON(env, NH_CACHE_PREFIX + id + ":" + fmt, e, env.DB ? { ttlMs: ttl } : undefined); } catch (_) {}
+}
+async function nhCacheDrop(env, id, fmt) {
+  if (!id || !fmt || fmt === "album") return;
+  try { await env.KV.delete(NH_CACHE_PREFIX + id + ":" + fmt); } catch (_) {}
+}
+// kirim hasil dari cache — perilaku sama kayak hasil builder: file + tombol 💾/⬇️ + auto-hapus 5 mnt
+async function nhCacheDeliver(env, chatId, L, id, fmt, e) {
+  const n = Number(e.n) || 0;
+  const cap = "<b>📦 NH " + hesc(String(id)) + "</b> (" + hesc(String(fmt).slice(0, 12)) + (n ? " · " + n + " hal" : "") + ")" + (e.t ? " — " + hesc(String(e.t).slice(0, 90)) : "") + "\n<i>" + hesc(L.nhCacheTag) + "</i>";
+  const tok = rndTok();
+  const kb = { inline_keyboard: [[{ text: L.nhSaveBtn, callback_data: "nhsave:" + tok }, { text: L.nhDlBtn, url: e.u }]] };
+  const dj = await tg(env, "sendDocument", { chat_id: chatId, document: e.u, caption: cap, parse_mode: "HTML", reply_markup: kb });
+  let mid = dj && dj.ok && dj.result ? dj.result.message_id : 0;
+  if (!mid) {
+    const j = await tg(env, "sendMessage", { chat_id: chatId, text: cap + "\n" + e.u, parse_mode: "HTML", reply_markup: kb });
+    mid = j && j.ok && j.result ? j.result.message_id : 0;
+  }
+  if (mid) {
+    try { await putJSON(env, NH_SAVE_PREFIX + tok, { id, t: e.t || "", n, u: e.u, m: mid }, env.DB ? { ttlMs: NH_AUTODEL_MS } : undefined); } catch (_) {}
+    await deleteLater(env, chatId, mid, NH_AUTODEL_MS, NH_KEEP_PREFIX + mid);
+  }
+  try { await nhStatInc(env, "hit"); } catch (_) {}
+  return "";
+}
+// counter harian (hari WIB) — dibaca /settings → NH → stats
+function nhDayKey(ms) {
+  const d = new Date((ms || Date.now()) + 7 * 3600 * 1000);
+  return d.toISOString().slice(0, 10).replace(/-/g, "");
+}
+export async function nhStatInc(env, field, n) {
+  const k = NH_STAT_PREFIX + nhDayKey();
+  let o = null;
+  try { o = await getJSON(env, k, null); } catch (_) { o = null; }
+  if (!o || typeof o !== "object") o = {};
+  o[field] = (Number(o[field]) || 0) + (Number(n) || 1);
+  o.at = Date.now();
+  try { await putJSON(env, k, o, env.DB ? { ttlMs: NH_STAT_TTL_MS } : undefined); } catch (_) {}
+  return o;
+}
+export async function nhStatGet(env, ms) {
+  let o = null;
+  try { o = await getJSON(env, NH_STAT_PREFIX + nhDayKey(ms), null); } catch (_) { o = null; }
+  return o && typeof o === "object" ? o : {};
+}
+// watchdog: job yang gak pernah dapet callback (runner mati / queue kelamaan) → tutup, kabarin, lepas busy
+// job kesimpen di D1 (kv table) jadi scan-nya lewat SQL; env.KV.list dipakai kalau gak ada D1 (dev/test)
+export async function nhWatchdog(env) {
+  const now = Date.now();
+  const rows = [];
+  try {
+    if (env.DB) {
+      const r = await env.DB.prepare("SELECT key, val FROM kv WHERE key LIKE ?1 LIMIT 40").bind(NH_JOB_PREFIX + "%").all();
+      for (const x of (r && r.results) || []) if (x && x.key) rows.push(x);
+    } else if (env.KV && typeof env.KV.list === "function") {
+      const ls = await env.KV.list({ prefix: NH_JOB_PREFIX });
+      for (const k of (ls && ls.keys) || []) rows.push({ key: k.name, val: await env.KV.get(k.name) });
+    }
+  } catch (_) { return 0; }
+  let n = 0;
+  for (const r of rows) {
+    if (n >= 10) break;
+    let job = null;
+    try { job = JSON.parse(r.val); } catch (_) { continue; }
+    if (!job || !job.chat || !job.ts) continue;
+    if (now - Number(job.ts) < NH_DEAD_MS) continue;
+    try { await env.KV.delete(r.key); } catch (_) {}
+    try { await env.KV.delete(NH_BUSY_PREFIX + job.chat + ":" + job.id + ":" + job.fmt); } catch (_) {}
+    const L = await uiLang(env);
+    let told = false;
+    if (job.mid) {
+      try {
+        const e = await tg(env, "editMessageText", { chat_id: job.chat, message_id: job.mid, text: L.nhDead, parse_mode: "HTML" });
+        told = !!(e && e.ok);
+      } catch (_) { told = false; }
+    }
+    if (!told) { try { await reply(env, job.chat, L.nhDead); } catch (_) {} }
+    try { await nhStatInc(env, "timeout"); } catch (_) {}
+    n++;
+  }
+  return n;
 }
 
 // v2.70.4: async zip builder lewat GitHub Actions (VPS-independent) — job key KV sekali pakai + repository_dispatch
@@ -1031,23 +1167,25 @@ async function nhBuilderGo(env, chatId, L, id, fmt) {
   // v2.71.0: pesan "⏳ building…" disimpen id-nya di job → dihapus pas /nhcb dateng
   const wj = await reply(env, chatId, L.nhZipWait);
   const wmid = wj && wj.result && wj.result.message_id ? wj.result.message_id : 0;
-  try { await putJSON(env, NH_JOB_PREFIX + tok, { id, fmt, chat: chatId, mid: wmid }, env.DB ? { ttlMs: NH_JOB_TTL_MS } : undefined); } catch (_) {}
+  try { await putJSON(env, NH_JOB_PREFIX + tok, { id, fmt, chat: chatId, mid: wmid, ts: Date.now() }, env.DB ? { ttlMs: NH_JOB_TTL_MS } : undefined); } catch (_) {}
   try { await putJSON(env, busyKey, { tok, id, fmt, chat: chatId }, env.DB ? { ttlMs: NH_JOB_TTL_MS } : undefined); } catch (_) {}
   const repo = String(env.NHBUILD_REPO || "ruqes/nhzip");
   const meta = String(env.NH_API || "").replace(/\/+$/, "");
   const cb = String(env.SELF_BASE || "").replace(/\/+$/, "") + "/nhcb";
   const host = await nhHost(env); // v2.72.0: provider pilihan owner (auto|x0at|kappa)
+  const pdfq = await nhPdfQ(env); // v2.73.0: preset kualitas PDF (normal|small)
   try {
     const r = await fetch("https://api.github.com/repos/" + repo + "/dispatches", {
       method: "POST",
       headers: { authorization: "Bearer " + env.GH_DISPATCH, accept: "application/vnd.github+json", "content-type": "application/json", "user-agent": "kibo" },
-      body: JSON.stringify({ event_type: "nh", client_payload: { id: String(id), fmt, meta, cb, tok, host } }),
+      body: JSON.stringify({ event_type: "nh", client_payload: { id: String(id), fmt, meta, cb, tok, host, pdfq } }),
       signal: AbortSignal.timeout(15000)
     });
     if (!r.ok) throw new Error("github " + r.status);
   } catch (e) {
     try { await env.KV.delete(NH_JOB_PREFIX + tok); } catch (_) {}
     try { await env.KV.delete(busyKey); } catch (_) {}
+    try { await nhStatInc(env, "fail"); } catch (_) {}
     if (wmid) { try { await tg(env, "deleteMessage", { chat_id: chatId, message_id: wmid }); } catch (_) {} }
     return reply(env, chatId, L.nhBuilderFail("dispatch " + String((e && e.message) || e).slice(0, 120)));
   }
@@ -1069,6 +1207,7 @@ export async function handleNhCb(request, env) {
   // v2.71.0: pesan "⏳ building the zip…" dihapus begitu hasilnya dateng (sukses maupun gagal)
   if (job.mid) { try { await tg(env, "deleteMessage", { chat_id: job.chat, message_id: job.mid }); } catch (_) {} }
   if (body.err) {
+    try { await nhStatInc(env, "fail"); } catch (_) {}
     await reply(env, job.chat, L.nhBuilderFail(String(body.err).slice(0, 300)));
     return jr(200, { ok: true });
   }
@@ -1091,6 +1230,13 @@ export async function handleNhCb(request, env) {
     try { await putJSON(env, NH_SAVE_PREFIX + stok, { id: job.id, t: bTitle, n: bPages, u: url, m: mid }, env.DB ? { ttlMs: NH_AUTODEL_MS } : undefined); } catch (_) {}
     await deleteLater(env, job.chat, mid, NH_AUTODEL_MS, NH_KEEP_PREFIX + mid);
   }
+  // v2.73.0: catet + simpen ke cache — build berikutnya (id+fmt sama) gak perlu GHA lagi
+  await nhCachePut(env, job.id, String(body.fmt || job.fmt || "zip"), { u: url, host: body.host, t: bTitle, n: bPages, mb: (Number(body.size) || 0) / 1048576 });
+  try {
+    await nhStatInc(env, "ok");
+    const mb = Math.round(((Number(body.size) || 0) / 1048576) * 10) / 10;
+    if (mb > 0) await nhStatInc(env, "mb", mb);
+  } catch (_) {}
   return jr(200, { ok: true });
 }
 
@@ -1162,6 +1308,18 @@ export async function handleNhSave(env, cbId, chatId, tok) {
   try { await tg(env, "answerCallbackQuery", { callback_query_id: cbId, text: saved ? L.nhSaved + " ✓ (" + saved + " hal di vault)" : "gagal kirim ke vault" }); } catch (_) {}
 }
 
+// v2.73.0: tombol "Bikin ZIP" dari album / /nhs — cache dulu, kalau belum ada baru dispatch builder
+export async function handleNhNzip(env, cbId, chatId, idRaw) {
+  const L = await uiLang(env);
+  const id = Number(String(idRaw || "").trim());
+  if (!id || !Number.isInteger(id)) { try { await tg(env, "answerCallbackQuery", { callback_query_id: cbId, text: "id gak valid" }); } catch (_) {} return; }
+  const hit = await nhCacheGet(env, id, "zip");
+  try { await tg(env, "answerCallbackQuery", { callback_query_id: cbId, text: hit ? L.nhCachePop : L.nhZipPop }); } catch (_) {}
+  if (hit) return nhCacheDeliver(env, chatId, L, id, "zip", hit);
+  if (env.GH_DISPATCH && env.NH_API) return nhBuilderGo(env, chatId, L, id, "zip");
+  return reply(env, chatId, L.nhCfg);
+}
+
 export async function handleNhs(env, msg, chatId) {
   const L = await uiLang(env);
   let cur = []; try { cur = JSON.parse(await env.KV.get(NH_SAVES_KEY) || "[]"); } catch (_) {}
@@ -1170,7 +1328,8 @@ export async function handleNhs(env, msg, chatId) {
   const rows = [];
   cur.slice(-20).reverse().forEach((x, i) => {
     lines.push((i + 1) + ". <b>" + (x.t ? hesc(String(x.t).slice(0, 60)) : "NH #" + x.id) + "</b>");
-    const dl = nhDl(env, x.id, "zip"); rows.push(dl ? [{ text: L.nhsOpen, callback_data: "nhop:" + x.id }, { text: L.nhsDl, url: dl }] : [{ text: L.nhsOpen, callback_data: "nhop:" + x.id }]);
+    const dl = nhDl(env, x.id, "zip");
+    rows.push([{ text: L.nhsOpen, callback_data: "nhop:" + x.id }, dl ? { text: L.nhsDl, url: dl } : { text: L.nhsZip, callback_data: "nhnz:" + x.id }]);
   });
   return tg(env, "sendMessage", { chat_id: chatId, text: lines.join("\n"), parse_mode: "HTML", reply_markup: { inline_keyboard: rows } });
 }

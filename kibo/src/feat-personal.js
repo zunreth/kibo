@@ -67,6 +67,8 @@ import {
   setLiveCtx,
   setLastCf,
   SHIELD_MAX,
+  NH_STAT_PREFIX,
+  NH_QUOTA_WARN,
 } from './consts.js';
 import {
   esc,
@@ -88,6 +90,8 @@ import {
   nukeSleep,
   nhDefFmt,
   nhHost,
+  nhPdfQ,
+  NH_PDFQS,
   NH_HOSTS,
 } from './base.js';
 import { d1Stats, shadowInfo } from './store-d1.js';
@@ -996,6 +1000,8 @@ export async function renderNhSetHub(env) {
     markup: { inline_keyboard: [
       [{ text: L.nhSetFmt, callback_data: "nav:nhdef" }],
       [{ text: L.nhSetProv, callback_data: "nav:nhprov" }],
+      [{ text: L.nhSetPdf, callback_data: "nav:nhpdf" }],
+      [{ text: L.nhSetStats, callback_data: "nav:nhstats" }],
       [{ text: L.back, callback_data: "nav:cfg" }, { text: L.home, callback_data: "menu" }]
     ] }
   };
@@ -1022,6 +1028,41 @@ export async function renderNhProvView(env) {
       ...NH_HOSTS.map(k => [{ text: (k === cur ? "\u2705 " : "") + L.nhProvLbl(k), callback_data: "nhprov:" + k }]),
       [{ text: L.back, callback_data: "nav:nhset" }, { text: L.home, callback_data: "menu" }]
     ] }
+  };
+}
+
+export async function renderNhPdfqView(env) {
+  const L = await uiLang(env);
+  const cur = await nhPdfQ(env);
+  return {
+    text: L.nhPdfTitle(L.nhPdfLbl(cur)) + UI_SEP + L.nhPdfNote,
+    markup: { inline_keyboard: [
+      ...NH_PDFQS.map(k => [{ text: (k === cur ? "✅ " : "") + L.nhPdfLbl(k), callback_data: "nhpdfq:" + k }]),
+      [{ text: L.back, callback_data: "nav:nhset" }, { text: L.home, callback_data: "menu" }]
+    ] }
+  };
+}
+
+// v2.73.0: stats harian /nh — hit (cache) vs ok/fail/timeout (builder) + estimasi kuota GHA
+export async function renderNhStatsView(env) {
+  const L = await uiLang(env);
+  const now = Date.now();
+  const key = d => NH_STAT_PREFIX + d;
+  const dayKey = ms => new Date(ms + 7 * 3600 * 1000).toISOString().slice(0, 10).replace(/-/g, "");
+  const today = dayKey(now), yest = dayKey(now - 86400000);
+  let t = {}, y = {};
+  try { t = (await getJSON(env, key(today), {})) || {}; } catch (_) {}
+  try { y = (await getJSON(env, key(yest), {})) || {}; } catch (_) {}
+  const num = (o, f) => Number(o[f]) || 0;
+  const row = (o, lbl) => lbl + ": ✅ " + num(o, "ok") + "  ·  ⚡ " + num(o, "hit") + "  ·  ❌ " + num(o, "fail") + "  ·  ⌛ " + num(o, "timeout") + "  ·  " + Math.round(num(o, "mb")) + " MB";
+  const builds = num(t, "ok") + num(t, "fail") + num(t, "timeout");
+  const dayLbl = new Date(now + 7 * 3600 * 1000).toISOString().slice(0, 10);
+  const lines = [L.nhStatsTitle(dayLbl), row(t, "Today"), row(y, "Yesterday")];
+  if (!builds && !num(t, "hit")) lines.push("(" + L.nhStatsEmpty + ")");
+  if (builds > NH_QUOTA_WARN) lines.push("🥵 " + L.nhStatsQuota(builds));
+  return {
+    text: lines.join("\n") + UI_SEP + L.nhStatsNote,
+    markup: { inline_keyboard: [[{ text: L.back, callback_data: "nav:nhset" }, { text: L.home, callback_data: "menu" }]] }
   };
 }
 

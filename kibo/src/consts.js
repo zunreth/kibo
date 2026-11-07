@@ -160,6 +160,16 @@ export const NH_BUSY_PREFIX = "nh_busy:"; // v2.70.5: anti-dobel — id+fmt sama
 export const NH_DEF_KEY = "nh_def";     // v2.71.0: format default /nh + link auto-detect (album|zip|pdf|scroll)
 export const NH_KEEP_PREFIX = "nhkeep:";  // v2.71.0: penanda "jangan hapus" — diisi pas tombol 💾 ditekan, dibaca delQsweep
 export const NH_HOST_KEY = "nh_host";   // v2.72.0: provider upload builder (auto|x0at|kappa)
+export const NH_PDFQ_KEY = "nh_pdfq";   // v2.73.0: preset kualitas PDF (normal|small) — ikut payload dispatch
+// v2.73.0: cache hasil build — id+fmt yang sama gak perlu dispatch GHA lagi (link provider permanen)
+export const NH_CACHE_PREFIX = "nh_cache:";
+export const NH_CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000;    // provider permanen (kappa.lol)
+export const NH_CACHE_TTL_TMP_MS = 3 * 24 * 60 * 60 * 1000;  // host auto-expire (x0.at)
+// v2.73.0: counter harian buat /settings → NH → stats (ok/fail/timeout/hit/mb)
+export const NH_STAT_PREFIX = "nh_stat:";
+export const NH_STAT_TTL_MS = 60 * 24 * 60 * 60 * 1000;
+export const NH_DEAD_MS = 15 * 60 * 1000;  // v2.73.0: watchdog — job tanpa callback > 15 mnt dianggap mati (TTL job 20 mnt)
+export const NH_QUOTA_WARN = 30;           // build/hari sebelum ngingetin kuota GHA
 export const YTS_MAX = 6; // v2.68.8: jumlah hasil /yts
 export const GAME_LYRIC_KEY = "glyric:";
 export const LYRIC_PTS = 8;
@@ -233,7 +243,7 @@ export const CHAIN_BONUS = 50;
 export const CHAIN_SHIELD = 1; // v2.68.14: hadiah tamat arc = +1 shield (bukan hangus/deadline; benefit permanen jaga streak)
 export const CHAIN_GEN_STALE_MS = 180000;
 export const SYS_CHAIN = "You generate a tiny 5-day quest arc for the user's Telegram bot companion. Reply with EXACTLY one line, pipe-separated, NO extra text, no markdown, no quotes: ArcName | step1 | step2 | step3 | step4 | step5. ArcName = a catchy title (max 6 words) for a fun, imaginative mini-adventure rooted in everyday life — habits, fitness, productivity, learning, a cozy hobby, or a small personal project. Frame it like a light RPG challenge so it feels exciting, but keep it believable: the 5 steps are a connected journey (day 1 an easy warm-up, days 2-4 climbing the arc, day 5 a satisfying finish). Each step = a short vivid label (max 8 words) the user can picture themselves doing. Make it fun, punchy, and a little playful — but NOT absurd, cartoonish, or slapstick (no talking animals, no stealing, no magical hijinks). Each step builds on the previous.";
-export const BOT_VER = "2.72.0";
+export const BOT_VER = "2.73.0";
 
 // edit-fitur v2.63.0
 export const EDIT_MARKER = "//";

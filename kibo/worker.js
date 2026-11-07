@@ -67,6 +67,7 @@ import {
   DIVE_DEF_KEY,
   NH_DEF_KEY,
   NH_HOST_KEY,
+  NH_PDFQ_KEY,
 } from './src/consts.js';
 import {
   esc,
@@ -265,6 +266,8 @@ import {
   renderNhSetHub,
   renderNhDefView,
   renderNhProvView,
+  renderNhPdfqView,
+  renderNhStatsView,
   renderDiveCfg,
   handleModel,
   handleLen,
@@ -309,7 +312,7 @@ import { diveStart, diveSkip, diveStop, divePrac, diveModePick, diveIntercept, d
 import { handleShop, shopBuy, handleInv, invUse, handleGacha, gachaPull, handleCharms, charmEq, handleAch, bmSave, handleHub } from './src/feat-econ.js';
 import { rlAdd, rlView, rlToggle, rlDel, otdView, shortAdd, shortResolve, wrapView, pasteAdd, pasteGet, handleHn } from './src/feat-b8.js';
 import { SHORT_KEY } from './src/consts.js';
-import { handleDl, handleSong, handleSpotify, dlPlatform, delQsweep, handleDlPick, handleYts, handleYtsPick, handleNh, handleNhSave, handleNhs, handleNhop, handleNhCb, nhLinkId, nhRun } from './src/feat-media.js';
+import { handleDl, handleSong, handleSpotify, dlPlatform, delQsweep, handleDlPick, handleYts, handleYtsPick, handleNh, handleNhSave, handleNhs, handleNhop, handleNhNzip, handleNhCb, nhLinkId, nhRun, nhWatchdog } from './src/feat-media.js';
 import { handleSauceCmd, handleSaucePhoto } from './src/feat-sauce.js';
 import { handleHostCmd, handleHostPhoto, handleHostCb, handleHostCancel, hostTrack, hostLinkFind, handleHostFetch } from './src/feat-host.js';
 import { handleAnime, handleWx, handleNp } from './src/feat-ctx.js';
@@ -384,7 +387,7 @@ export default {
   async scheduled(event, env, ctx) {
     setLiveCtx(ctx);
     try { if (!env.__kvw) { env.KV = wrapStore(env); env.__kvw = true; } } catch (_) {}
-    ctx.waitUntil(runCron(env).catch(e => onUpdErr(env, e)).then(() => Promise.all([flushStatsBuf(env), flushNukeBuf(env), d1Sweep(env), shadowSync(env), delQsweep(env), diveCronTick(env).catch(() => {}), divePreGen(env).catch(() => {}), gameIdleTick(env).catch(() => {})])));
+    ctx.waitUntil(runCron(env).catch(e => onUpdErr(env, e)).then(() => Promise.all([flushStatsBuf(env), flushNukeBuf(env), d1Sweep(env), shadowSync(env), delQsweep(env), nhWatchdog(env).catch(() => {}), diveCronTick(env).catch(() => {}), divePreGen(env).catch(() => {}), gameIdleTick(env).catch(() => {})])));
   }
 };
 
@@ -719,6 +722,8 @@ async function handleCallback(env, cb) {
     else if (arg === "nhset") view = await renderNhSetHub(env);
     else if (arg === "nhdef") view = await renderNhDefView(env);
     else if (arg === "nhprov") view = await renderNhProvView(env);
+    else if (arg === "nhpdf") view = await renderNhPdfqView(env);
+    else if (arg === "nhstats") view = await renderNhStatsView(env);
     else if (arg === "dbg") view = await renderDebugView(env);
     else if (arg === "divecfg") view = await renderDiveCfg(env);
     else if (arg === "vault") view = await renderVault(env, L);
@@ -756,6 +761,12 @@ async function handleCallback(env, cb) {
     await env.KV.put(NH_HOST_KEY, k);
     await tg(env, "answerCallbackQuery", { callback_query_id: cb.id, text: L.nhProvPop(L.nhProvLbl(k)) });
     await edit(await renderNhProvView(env));
+  } else if (act === "nhpdfq" && chatId) {
+    // v2.73.0: preset kualitas PDF (normal|small) — ikut payload dispatch
+    const k = ["normal", "small"].includes(arg) ? arg : "normal";
+    await env.KV.put(NH_PDFQ_KEY, k);
+    await tg(env, "answerCallbackQuery", { callback_query_id: cb.id, text: L.nhPdfPop(L.nhPdfLbl(k)) });
+    await edit(await renderNhPdfqView(env));
   } else if (act === "dvset" && chatId) {
     const lbl = { chill: L.cfgDiveChill, normal: L.cfgDiveNormal, deep: L.cfgDiveDeep }[arg] || L.cfgDiveAskLbl;
     if (arg === "ask") await env.KV.delete(DIVE_DEF_KEY);
@@ -770,6 +781,9 @@ async function handleCallback(env, cb) {
     await handleNhSave(env, cb.id, chatId, arg);
   } else if (act === "nhop" && chatId) {
     await handleNhop(env, cb.id, chatId, arg);
+  } else if (act === "nhnz" && chatId) {
+    // v2.73.0: tombol "Bikin ZIP" (album & /nhs) — cache dulu, baru dispatch builder
+    await handleNhNzip(env, cb.id, chatId, arg);
   } else if (act === "hostp" && chatId) {
     await handleHostCb(env, cb.id, chatId, mid, arg);
   } else if (act === "hostcancel" && chatId) {

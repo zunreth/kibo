@@ -49,6 +49,7 @@ import {
   VAULT_OP_KEY,
   NH_DEF_KEY,
   NH_HOST_KEY,
+  NH_PDFQ_KEY,
   FILE_MAX,
   SNAP_MAX,
   ABORT_KEY,
@@ -137,6 +138,13 @@ export async function nhDefFmt(env) {
 }
 // v2.72.0: provider upload builder — auto (x0.at → kappa) / x0at / kappa
 export const NH_HOSTS = ["auto", "x0at", "kappa"];
+// v2.73.0: preset kualitas PDF — normal = 1600px/q82 (default, perilaku lama), small = 1100px/q76 (buat yang mau file ringan)
+export const NH_PDFQS = ["normal", "small"];
+export async function nhPdfQ(env) {
+  let v = "";
+  try { v = String((await env.KV.get(NH_PDFQ_KEY)) || "").trim().toLowerCase(); } catch (_) {}
+  return NH_PDFQS.includes(v) ? v : "normal";
+}
 export async function nhHost(env) {
   let v = "";
   try { v = String((await env.KV.get(NH_HOST_KEY)) || "").trim().toLowerCase(); } catch (_) {}
