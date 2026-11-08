@@ -1,6 +1,6 @@
 import { tg, reply, getJSON, putJSON, scheduleDelete, tgErrLog, tgUpTmo, NH_FMT_ALIAS, nhDefFmt, nhHost, nhPdfQ } from "./base.js";
 import { uiLang, SEP_LINE } from "./ui.js";
-import { UA, UA_BOT, DL_CACHE_PREFIX, DL_CACHE_TTL_MS, DL_POLL_MS, DL_POLL_MAX, DL_MAX_LINKS, DL_YT_FORMATS, DL_SEND_MAX, DL_URL_SEND_MAX, DL_SEND_PHOTO_MAX, FGSI_IG_URL, FGSI_KEY, KYIO_BASE, DL_DEL_MS, DELQ_KEY, DL_MENU_TTL_MS, DL_PICK_PREFIX, DL_SAV_PREFIX, DL_SAV_TTL_MS, DL_BIG_PREFIX, YT_PICK_PREFIX, YTS_MAX, NH_SAVE_PREFIX, NH_SAVES_KEY, NH_AUTODEL_MS, NH_JOB_PREFIX, NH_JOB_TTL_MS, NH_BUSY_PREFIX, NH_KEEP_PREFIX, NH_CACHE_PREFIX, NH_CACHE_TTL_MS, NH_CACHE_TTL_TMP_MS, NH_STAT_PREFIX, NH_STAT_TTL_MS, NH_DEAD_MS, VAULT_CHAT_KEY, FILE_INDEX_KEY } from "./consts.js";
+import { UA, UA_BOT, DL_CACHE_PREFIX, DL_CACHE_TTL_MS, DL_POLL_MS, DL_POLL_MAX, DL_MAX_LINKS, DL_YT_FORMATS, DL_SEND_MAX, DL_URL_SEND_MAX, DL_SEND_PHOTO_MAX, FGSI_IG_URL, FGSI_KEY, KYIO_BASE, DL_DEL_MS, DELQ_KEY, DL_MENU_TTL_MS, DL_PICK_PREFIX, DL_SAV_PREFIX, DL_SAV_TTL_MS, DL_BIG_PREFIX, YT_PICK_PREFIX, YTS_MAX, NH_SAVE_PREFIX, NH_SAVES_KEY, NH_AUTODEL_MS, NH_JOB_PREFIX, NH_JOB_TTL_MS, NH_BUSY_PREFIX, NH_KEEP_PREFIX, NH_CACHE_PREFIX, NH_CACHE_TTL_MS, NH_CACHE_TTL_TMP_MS, NH_RECENT_KEY, NH_RECENT_MAX, NH_STAT_PREFIX, NH_STAT_TTL_MS, NH_DEAD_MS, VAULT_CHAT_KEY, FILE_INDEX_KEY } from "./consts.js";
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
@@ -991,6 +991,8 @@ async function nhAlbumDeliver(env, chatId, L, id, title, numPages, pages, ctrlMi
 export async function handleNh(env, msg, chatId) {
   const raw = (msg.text || "").replace(/^\/\S+\s*/, "").trim();
   const parts = raw.split(/\s+/);
+  // R-12: `/nh last [fmt]` re-sends the newest cached build instead of dispatching another one.
+  if (/^last$/i.test(parts[0] || "")) return nhLast(env, chatId, parts[1]);
   return nhRun(env, chatId, parts[0], parts[1], parts[2]);
 }
 
@@ -1074,6 +1076,34 @@ async function nhCachePut(env, id, fmt, o) {
   const ttl = /^kappa/.test(host) ? NH_CACHE_TTL_MS : NH_CACHE_TTL_TMP_MS;
   const e = { u, host, t: String((o && o.t) || "").slice(0, 110), n: Number((o && o.n) || 0) || 0, mb: Math.round((Number((o && o.mb) || 0)) * 10) / 10, ts: Date.now(), ttl };
   try { await putJSON(env, NH_CACHE_PREFIX + id + ":" + fmt, e, env.DB ? { ttlMs: ttl } : undefined); } catch (_) {}
+  await nhRecentPush(env, id, fmt, e.t);
+}
+
+// R-12: `/nh last` needs to know what was built most recently, and the cache layout
+// (nh_cache:<id>:<fmt>) cannot be listed. One small index, newest first, capped.
+export async function nhRecentPush(env, id, fmt, title) {
+  if (!id || !fmt || fmt === "album") return;
+  try {
+    const cur = (await getJSON(env, NH_RECENT_KEY, [])) || [];
+    const rest = (Array.isArray(cur) ? cur : []).filter(x => !(x && Number(x.id) === Number(id) && x.fmt === fmt));
+    rest.unshift({ id: Number(id), fmt: String(fmt), t: String(title || "").slice(0, 90), ts: Date.now() });
+    await putJSON(env, NH_RECENT_KEY, rest.slice(0, NH_RECENT_MAX));
+  } catch (_) {}
+}
+
+export async function nhLast(env, chatId, fmtRaw) {
+  const L = await uiLang(env);
+  let cur = [];
+  try { cur = JSON.parse((await env.KV.get(NH_RECENT_KEY)) || "[]"); } catch (_) { cur = []; }
+  if (!Array.isArray(cur) || !cur.length) return reply(env, chatId, L.nhLastEmpty);
+  const want = String(fmtRaw || "").trim().toLowerCase();
+  const fmt = want ? NH_FMT_ALIAS[want] || "" : "";
+  if (want && !fmt) return reply(env, chatId, L.nhBadFmt);
+  const pick = fmt ? cur.find(x => x && x.fmt === fmt) : cur[0];
+  if (!pick) return reply(env, chatId, L.nhLastNone(fmt));
+  const cached = await nhCacheGet(env, pick.id, pick.fmt);
+  if (!cached) return reply(env, chatId, L.nhLastGone(pick.id, pick.fmt));
+  return nhRun(env, chatId, String(pick.id), pick.fmt);
 }
 async function nhCacheDrop(env, id, fmt) {
   if (!id || !fmt || fmt === "album") return;
