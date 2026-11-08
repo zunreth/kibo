@@ -161,6 +161,7 @@ export const YT_UP_PREFIX = "ytup:"; // "send it into the chat" token for a reso
 // behind a token-gated proxy). Its links refuse Telegram's fetchers, so the Worker downloads and
 // re-uploads the bytes itself — no GitHub Actions unless the resolver is down.
 export const PURUBOY_BASE = "https://na-api-nue-api-e7bfd3f4.koyeb.app";
+export const BTCH_BASE = "https://btch-downloader-api-green.vercel.app"; // fast proxy (29 MB/s measured), no quality ladder
 export const YT_UPLOAD_MAX = 40 * 1024 * 1024; // multipart ceiling we can hold in one isolate
 // v2.69.13: album full-Worker VPS-independent — nhMeta cuma ke nhdl-w (mirror cin.guru + API fallback + cache); /nh tanpa format WAJIB album; gak ada egress VPS buat metadata
 export const NH_SAVE_PREFIX = "nhsav:";   // token button "Simpan ke vault" bawa {id,title,pages}
@@ -258,7 +259,7 @@ export const CHAIN_BONUS = 50;
 export const CHAIN_SHIELD = 1; // v2.68.14: hadiah tamat arc = +1 shield (bukan hangus/deadline; benefit permanen jaga streak)
 export const CHAIN_GEN_STALE_MS = 180000;
 export const SYS_CHAIN = "You generate a tiny 5-day quest arc for the user's Telegram bot companion. Reply with EXACTLY one line, pipe-separated, NO extra text, no markdown, no quotes: ArcName | step1 | step2 | step3 | step4 | step5. ArcName = a catchy title (max 6 words) for a fun, imaginative mini-adventure rooted in everyday life — habits, fitness, productivity, learning, a cozy hobby, or a small personal project. Frame it like a light RPG challenge so it feels exciting, but keep it believable: the 5 steps are a connected journey (day 1 an easy warm-up, days 2-4 climbing the arc, day 5 a satisfying finish). Each step = a short vivid label (max 8 words) the user can picture themselves doing. Make it fun, punchy, and a little playful — but NOT absurd, cartoonish, or slapstick (no talking animals, no stealing, no magical hijinks). Each step builds on the previous.";
-export const BOT_VER = "2.76.2";
+export const BOT_VER = "2.76.3";
 
 // edit-fitur v2.63.0
 export const EDIT_MARKER = "//";
