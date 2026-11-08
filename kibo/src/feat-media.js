@@ -1,6 +1,6 @@
 import { tg, reply, getJSON, putJSON, scheduleDelete, tgErrLog, tgUpTmo, NH_FMT_ALIAS, nhDefFmt, nhHost, nhPdfQ } from "./base.js";
 import { uiLang, SEP_LINE } from "./ui.js";
-import { UA, UA_BOT, DL_CACHE_PREFIX, DL_CACHE_TTL_MS, DL_MAX_LINKS, DL_SEND_MAX, DL_URL_SEND_MAX, DL_SEND_PHOTO_MAX, FGSI_IG_URL, FGSI_KEY, KYIO_BASE, DL_DEL_MS, DELQ_KEY, DL_MENU_TTL_MS, DL_PICK_PREFIX, DL_SAV_PREFIX, DL_SAV_TTL_MS, DL_BIG_PREFIX, YT_PICK_PREFIX, YT_BUILD_PREFIX, YT_JOB_PREFIX, YT_BUSY_PREFIX, YT_CACHE_PREFIX, YT_CACHE_TTL_MS, YT_CACHE_TTL_TMP_MS, YTS_MAX, NH_SAVE_PREFIX, NH_SAVES_KEY, NH_AUTODEL_MS, NH_JOB_PREFIX, NH_JOB_TTL_MS, NH_BUSY_PREFIX, NH_KEEP_PREFIX, NH_CACHE_PREFIX, NH_CACHE_TTL_MS, NH_CACHE_TTL_TMP_MS, NH_RECENT_KEY, NH_RECENT_MAX, NH_STAT_PREFIX, NH_STAT_TTL_MS, NH_DEAD_MS, VAULT_CHAT_KEY, FILE_INDEX_KEY } from "./consts.js";
+import { UA, UA_BOT, DL_CACHE_PREFIX, DL_CACHE_TTL_MS, DL_MAX_LINKS, DL_SEND_MAX, DL_URL_SEND_MAX, DL_SEND_PHOTO_MAX, FGSI_IG_URL, FGSI_KEY, KYIO_BASE, DL_DEL_MS, DELQ_KEY, DL_MENU_TTL_MS, DL_PICK_PREFIX, DL_SAV_PREFIX, DL_SAV_TTL_MS, DL_BIG_PREFIX, YT_PICK_PREFIX, YT_BUILD_PREFIX, YT_JOB_PREFIX, YT_BUSY_PREFIX, YT_CACHE_PREFIX, YT_CACHE_TTL_MS, YT_CACHE_TTL_TMP_MS, YT_UP_PREFIX, PURUBOY_BASE, YT_UPLOAD_MAX, YTS_MAX, NH_SAVE_PREFIX, NH_SAVES_KEY, NH_AUTODEL_MS, NH_JOB_PREFIX, NH_JOB_TTL_MS, NH_BUSY_PREFIX, NH_KEEP_PREFIX, NH_CACHE_PREFIX, NH_CACHE_TTL_MS, NH_CACHE_TTL_TMP_MS, NH_RECENT_KEY, NH_RECENT_MAX, NH_STAT_PREFIX, NH_STAT_TTL_MS, NH_DEAD_MS, VAULT_CHAT_KEY, FILE_INDEX_KEY } from "./consts.js";
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
@@ -1452,8 +1452,8 @@ export async function handleYtsPick(env, cbId, chatId, mid, tok) {
   try { await env.KV.delete(YT_PICK_PREFIX + tok); } catch (_) {}
   if (!e || !e.u) { await tg(env, "answerCallbackQuery", { callback_query_id: cbId, text: L.dlExpired }); return; }
   await tg(env, "answerCallbackQuery", { callback_query_id: cbId, text: L.popSearching });
-  await tg(env, "editMessageText", { chat_id: chatId, message_id: mid, text: L.dlWorking, parse_mode: "HTML" });
-  await tg(env, "sendChatAction", { chat_id: chatId, action: "typing" });
+  // The menu is local data — no resolver round-trip, so it opens instantly and never waits on a
+  // third-party host that may be dead. Every quality is a builder job from here.
   return ytMenuShow(env, chatId, L, mid, e.u, { title: e.t || "", author: e.ch || "", views: e.v || 0 });
 }
 
@@ -1473,14 +1473,12 @@ export async function ytMenuShow(env, chatId, L, mid, url, metaRaw) {
     }
   }
   if (!meta.duration) { try { const d = await ytDurSeconds(env, url); if (d) meta.duration = d; } catch (_) {} }
-  let res = null;
-  try { res = await dlResolveHard(env, url, "youtube"); } catch (_) { res = null; }
-  const instant = res && res.items ? res.items.find(x => x.kind === "video") || null : null;
   const tok = rndTok();
   try { await putJSON(env, YT_BUILD_PREFIX + tok, { c: chatId, u: url, t: String(meta.title || "").slice(0, 120), ch: String(meta.author || "").slice(0, 60), exp: Date.now() + DL_SAV_TTL_MS }, env.DB ? { ttlMs: DL_SAV_TTL_MS } : undefined); } catch (_) {}
-  const rows = [[{ text: L.ytB720, callback_data: "ytb:720:" + tok }, { text: L.ytBMp3, callback_data: "ytb:mp3:" + tok }]];
-  rows.push([{ text: L.ytsWatch, url }]);
-  return dlMenuShow(env, chatId, L, mid, "youtube", instant ? [instant] : [], meta, 0, rows, url, L.ytMenuNote);
+  const rows = [["144", "240", "360"].map(h => ({ text: L.ytQ(h), callback_data: "ytb:" + h + ":" + tok }))];
+  rows.push(["480", "720", "1080"].map(h => ({ text: L.ytQ(h), callback_data: "ytb:" + h + ":" + tok })));
+  rows.push([{ text: L.ytBMp3, callback_data: "ytb:mp3:" + tok }, { text: L.ytsWatch, url }]);
+  return dlMenuShow(env, chatId, L, mid, "youtube", [], meta, 0, rows, url, L.ytMenuNote);
 }
 
 async function ytCacheGet(env, vid, kind) {
@@ -1500,26 +1498,140 @@ async function ytCachePut(env, vid, kind, o) {
   const u = String((o && o.u) || "");
   if (!/^https:\/\/\S+$/.test(u)) return;
   const host = String((o && o.host) || "").toLowerCase();
-  const ttl = /^kappa/.test(host) ? YT_CACHE_TTL_MS : YT_CACHE_TTL_TMP_MS; // permanent host may be cached longer than an expiring one
-  try { await putJSON(env, YT_CACHE_PREFIX + vid + ":" + kind, { u, host, t: String((o && o.t) || "").slice(0, 110), sz: Number((o && o.sz) || 0) || 0, ts: Date.now(), ttl }, env.DB ? { ttlMs: ttl } : undefined); } catch (_) {}
+  // Cache only as long as the link actually lives: a permanent host may be kept for a month,
+  // sendit.sh dies after a day (or five downloads).
+  const ttl = /^kappa/.test(host) ? YT_CACHE_TTL_MS
+    : /^sendit/.test(host) ? 20 * 60 * 60 * 1000
+    : /^puruboy/.test(host) ? 6 * 60 * 60 * 1000 // token-gated proxy, short life
+    : YT_CACHE_TTL_TMP_MS;
+  try { await putJSON(env, YT_CACHE_PREFIX + vid + ":" + kind, { u, host, t: String((o && o.t) || "").slice(0, 110), fmt: String((o && o.fmt) || "").slice(0, 12), exp: String((o && o.exp) || "").slice(0, 40), sz: Number((o && o.sz) || 0) || 0, ts: Date.now(), ttl }, env.DB ? { ttlMs: ttl } : undefined); } catch (_) {}
 }
 
-// Send one built file. Telegram's by-URL video ceiling is 20 MB and a document may go up to 50 MB,
-// so a bigger render still arrives as a file instead of dying as a dead button.
-async function ytDeliver(env, chatId, L, mid, fileUrl, kind, title, size, cached) {
-  const cap = "<b>" + (kind === "mp3" ? "\uD83C\uDFB5" : "\uD83C\uDFAC") + " " + hesc(String(title || "YouTube").slice(0, 110)) + "</b>" + (cached ? "\n<i>" + hesc(L.ytCacheTag) + "</i>" : "");
-  const kb = { inline_keyboard: [[{ text: L.ytDlBtn, url: fileUrl }]] };
+// Send one built file. Telegram's by-URL ceiling is 20 MB, but that is a delivery detail, not a
+// download limit: anything bigger arrives as a direct link on a temporary host, never as an error.
+async function ytDeliver(env, chatId, L, mid, fileUrl, kind, title, size, cached, meta) {
+  const m = meta || {};
   const sz = Number(size) || 0;
+  const mb = sz ? (sz / 1048576).toFixed(1) : "";
+  const head = "<b>" + (kind === "mp3" ? "\uD83C\uDFB5" : "\uD83C\uDFAC") + " " + hesc(String(title || "YouTube").slice(0, 110)) + "</b>";
+  const kb = { inline_keyboard: [[{ text: L.ytDlBtnSz(mb || "?"), url: fileUrl }]] };
   let j = null;
-  let tooBig = false;
-  if (kind === "mp3") j = await tg(env, "sendAudio", { chat_id: chatId, audio: fileUrl, title: String(title || "audio").slice(0, 60), caption: cap, parse_mode: "HTML", reply_markup: kb });
-  else if (!sz || sz <= DL_URL_SEND_MAX) j = await tg(env, "sendVideo", { chat_id: chatId, video: fileUrl, supports_streaming: true, caption: cap, parse_mode: "HTML", reply_markup: kb });
-  else tooBig = true; // by-URL tops out at 20 MB — a doomed request only wastes seconds
-  if (!tooBig && (!j || !j.ok)) j = await tg(env, "sendDocument", { chat_id: chatId, document: fileUrl, caption: cap, parse_mode: "HTML", reply_markup: kb });
+  if (kind === "mp3") j = await tg(env, "sendAudio", { chat_id: chatId, audio: fileUrl, title: String(title || "audio").slice(0, 60), caption: head, parse_mode: "HTML", reply_markup: kb });
+  else if (!sz || sz <= DL_URL_SEND_MAX) j = await tg(env, "sendVideo", { chat_id: chatId, video: fileUrl, supports_streaming: true, caption: head, parse_mode: "HTML", reply_markup: kb });
+  if (!j || !j.ok) {
+    if (kind !== "mp3" && sz && sz > DL_URL_SEND_MAX) j = null; // doomed by-URL upload — skip straight to the link
+    else j = await tg(env, "sendDocument", { chat_id: chatId, document: fileUrl, caption: head, parse_mode: "HTML", reply_markup: kb });
+  }
   const okMid = j && j.ok && j.result ? j.result.message_id : 0;
+  if (!okMid) {
+    // Big render or a host Telegram refuses: hand over the link instead of failing.
+    const txt = head + "\n" + L.ytLinkMeta(m.fmt || (kind === "mp3" ? "MP3" : ""), mb, m.exp || "") + "\n<i>" + L.ytLinkNote + "</i>" + (cached ? "\n<i>" + L.ytCacheTag + "</i>" : "");
+    const lj = await tg(env, "sendMessage", { chat_id: chatId, text: txt, parse_mode: "HTML", disable_web_page_preview: true, reply_markup: kb });
+    const lmid = lj && lj.ok && lj.result ? lj.result.message_id : 0;
+    if (mid) { try { await tg(env, "deleteMessage", { chat_id: chatId, message_id: mid }); } catch (_) {} }
+    return !!lmid;
+  }
+  if (mid) { try { await tg(env, "deleteMessage", { chat_id: chatId, message_id: mid }); } catch (_) {} }
+  await deleteLater(env, chatId, okMid, dlDelMs(env));
+  return true;
+}
+
+// Quality the owner picked. 144p…1080p is what the resolver actually offers; GHA is the fallback.
+const YT_KINDS = ["144", "240", "360", "480", "720", "1080", "mp3"];
+const YT_CAP_MB = { "144": 60, "240": 80, "360": 120, "480": 200, "720": 300, "1080": 500, mp3: 120 };
+
+// puruboy = yt-dlp in an E2B sandbox, keyless, with a quality parameter and real sizes. Its
+// download URL is a token-gated proxy that refuses Telegram's fetchers (verified: sendVideo by
+// URL = 400 "failed to get HTTP URL content"), so the bytes come through us instead.
+async function pbYt(env, url, kind) {
+  const q = kind === "mp3" ? "type=audio" : "quality=" + kind;
+  const api = String(env.PURUBOY_BASE || PURUBOY_BASE).replace(/\/+$/, "") + "/api/downloader/youtube?url=" + encodeURIComponent(url) + "&" + q;
+  for (let i = 0; i < 2; i++) {
+    try {
+      const r = await fetch(api, { headers: { "user-agent": UA }, signal: AbortSignal.timeout(60000) });
+      const j = await r.json().catch(() => null);
+      const u = j && j.success && j.download ? String(j.download.url || "") : "";
+      if (/^https:\/\/\S+$/.test(u)) {
+        const want = kind === "mp3" ? "" : kind + "p";
+        const qs = Array.isArray(j.qualities) ? j.qualities : [];
+        const row = qs.find(x => String(x.quality || "") === want) || null;
+        return { u, t: String(j.title || "").slice(0, 110), dur: Number(j.duration) || 0, sz: Number((j.download.size) || (row && row.size) || 0) || 0, fmt: kind === "mp3" ? "MP3" : kind + "p" };
+      }
+    } catch (_) {}
+  }
+  return null;
+}
+
+// Resolver bytes → Telegram. 40 MB is our own ceiling (one isolate holds the blob); past that the
+// link is the honest answer, because Telegram cannot fetch these hosts itself.
+async function ytUploadResolved(env, chatId, L, mid, url, kind, title, fmt) {
+  let f = null;
+  try {
+    const r = await fetch(url, { headers: { "user-agent": UA }, signal: AbortSignal.timeout(90000) });
+    const ct = (r.headers.get("content-type") || "").split(";")[0].trim().toLowerCase();
+    if (env.__probe) env.__probe.push({ mid: null, method: "ytfetch", chat: chatId, text: r.status + " " + ct + " " + (r.headers.get("content-length") || "?") });
+    if (r.ok && r.body) {
+      const rd = r.body.getReader();
+      const chunks = [];
+      let got = 0;
+      for (;;) {
+        const cr = await rd.read();
+        if (cr.done) break;
+        got += cr.value.length;
+        if (got > YT_UPLOAD_MAX) { try { await rd.cancel(); } catch (_) {} got = -1; break; }
+        chunks.push(cr.value);
+      }
+      if (got > 0) f = { chunks, size: got };
+    }
+  } catch (e) { if (env.__probe) env.__probe.push({ mid: null, method: "ytfetch", chat: chatId, text: "ERR " + String((e && e.message) || e).slice(0, 80) }); }
+  if (!f) return false;
+  const head = "<b>" + (kind === "mp3" ? "\uD83C\uDFB5" : "\uD83C\uDFAC") + " " + hesc(String(title || "YouTube").slice(0, 110)) + "</b>\n" + L.ytLinkMeta(fmt, (f.size / 1048576).toFixed(1), "");
+  const form = new FormData();
+  form.append("chat_id", String(chatId));
+  form.append(kind === "mp3" ? "audio" : "video", new Blob(f.chunks, { type: kind === "mp3" ? "audio/mpeg" : "video/mp4" }), kind === "mp3" ? "audio.mp3" : "video.mp4");
+  if (kind !== "mp3") form.append("supports_streaming", "true");
+  form.append("caption", head);
+  form.append("parse_mode", "HTML");
+  form.append("reply_markup", JSON.stringify({ inline_keyboard: [[{ text: L.ytDlBtnSz((f.size / 1048576).toFixed(1)), url: url }]] }));
+  let j = null;
+  try {
+    const r = await fetch("https://api.telegram.org/bot" + env.TG_TOKEN + "/" + (kind === "mp3" ? "sendAudio" : "sendVideo"), { method: "POST", body: form, signal: tgUpTmo(env) });
+    j = await r.json().catch(() => null);
+    if (!j || !j.ok) tgErrLog(env, "sendVideo", j);
+  } catch (_) { j = null; }
+  const okMid = j && j.ok && j.result ? j.result.message_id : 0;
+  if (env.__probe && j && j.ok) env.__probe.push({ mid: okMid || null, method: kind === "mp3" ? "sendAudio" : "sendVideo", chat: chatId, text: String(head).slice(0, 400) });
   if (mid) { try { await tg(env, "deleteMessage", { chat_id: chatId, message_id: mid }); } catch (_) {} }
   if (okMid) await deleteLater(env, chatId, okMid, dlDelMs(env));
   return !!okMid;
+}
+
+// Link card — instant, and the honest answer for hosts Telegram refuses to fetch. A second
+// button pulls the bytes through the Worker when the owner actually wants it in the chat.
+async function ytLinkCard(env, chatId, L, mid, fileUrl, kind, title, size, meta, upTok) {
+  const m = meta || {};
+  const mb = size ? (size / 1048576).toFixed(1) : "";
+  const head = "<b>" + (kind === "mp3" ? "\uD83C\uDFB5" : "\uD83C\uDFAC") + " " + hesc(String(title || "YouTube").slice(0, 110)) + "</b>";
+  const txt = head + "\n" + L.ytLinkMeta(m.fmt || (kind === "mp3" ? "MP3" : ""), mb, m.exp || "") + "\n<i>" + L.ytLinkNote + "</i>";
+  const rows = [[{ text: L.ytDlBtnSz(mb || "?"), url: fileUrl }]];
+  if (upTok) rows.push([{ text: L.ytToChat, callback_data: "ytup:" + upTok }]);
+  const j = await tg(env, "sendMessage", { chat_id: chatId, text: txt, parse_mode: "HTML", disable_web_page_preview: true, reply_markup: { inline_keyboard: rows } });
+  const okMid = j && j.ok && j.result ? j.result.message_id : 0;
+  if (mid) { try { await tg(env, "deleteMessage", { chat_id: chatId, message_id: mid }); } catch (_) {} }
+  return !!okMid;
+}
+
+// "Send it into the chat": the resolver link is unfetchable for Telegram, so the bytes come
+// through this isolate. Slow on purpose — it only runs when the owner taps the button.
+export async function handleYtUpload(env, cbId, chatId, mid, tok) {
+  const L = await uiLang(env);
+  const e = await getJSON(env, YT_UP_PREFIX + tok, null);
+  if (!e || !e.u) { await tg(env, "answerCallbackQuery", { callback_query_id: cbId, text: L.dlExpired }); return; }
+  await tg(env, "answerCallbackQuery", { callback_query_id: cbId, text: L.ytUpPop });
+  if (mid) { try { await tg(env, "editMessageText", { chat_id: chatId, message_id: mid, text: L.ytUpWait, parse_mode: "HTML" }); } catch (_) {} }
+  const ok = await ytUploadResolved(env, chatId, L, mid, e.u, e.k || "360", e.t || "", e.f || "");
+  if (ok) { try { await env.KV.delete(YT_UP_PREFIX + tok); } catch (_) {} return; }
+  await reply(env, chatId, L.ytUpFail);
 }
 
 // 720p / MP3 button: cache hit = instant, otherwise dispatch one builder job.
@@ -1529,7 +1641,7 @@ export async function handleYtBuild(env, cbId, chatId, mid, arg) {
   const cut = s.indexOf(":");
   const req = cut < 0 ? s : s.slice(0, cut);
   const tok = cut < 0 ? "" : s.slice(cut + 1);
-  const kind = req === "720" ? "720" : req === "mp3" ? "mp3" : "";
+  const kind = YT_KINDS.indexOf(req) >= 0 ? req : req === "best" || req === "720" ? "720" : "";
   const e = kind ? await getJSON(env, YT_BUILD_PREFIX + tok, null) : null;
   if (!e || !e.u) { await tg(env, "answerCallbackQuery", { callback_query_id: cbId, text: L.dlExpired }); return; }
   const vid = ytIdOf(e.u) || e.u;
@@ -1540,7 +1652,14 @@ export async function handleYtBuild(env, cbId, chatId, mid, arg) {
   const hit = await ytCacheGet(env, vid, kind);
   if (hit) {
     await tg(env, "answerCallbackQuery", { callback_query_id: cbId, text: L.ytCachePop });
-    const ok = await ytDeliver(env, chatId, L, mid, hit.u, kind, hit.t || e.t || "", hit.sz || 0, true);
+    if (/^puruboy/.test(String(hit.host || ""))) {
+      // Telegram cannot fetch this host — same card + "send to chat" as the first time
+      const upTok = rndTok();
+      try { await putJSON(env, YT_UP_PREFIX + upTok, { c: chatId, u: hit.u, k: kind, t: hit.t || e.t || "", f: hit.fmt || "", exp: Date.now() + DL_SAV_TTL_MS }, env.DB ? { ttlMs: DL_SAV_TTL_MS } : undefined); } catch (_) {}
+      const card = await ytLinkCard(env, chatId, L, mid, hit.u, kind, hit.t || e.t || "", hit.sz || 0, { fmt: hit.fmt }, upTok);
+      if (card) return;
+    }
+    const ok = await ytDeliver(env, chatId, L, mid, hit.u, kind, hit.t || e.t || "", hit.sz || 0, true, { fmt: hit.fmt, exp: hit.exp });
     if (!ok) await reply(env, chatId, L.ytLinkOnly(hit.u));
     return;
   }
@@ -1548,6 +1667,15 @@ export async function handleYtBuild(env, cbId, chatId, mid, arg) {
   let wmid = mid || 0;
   if (wmid) await tg(env, "editMessageText", { chat_id: chatId, message_id: wmid, text: L.ytBuildWait(kind), parse_mode: "HTML" });
   else { const wj = await reply(env, chatId, L.ytBuildWait(kind)); wmid = (wj && wj.result && wj.result.message_id) || 0; }
+  // Primary path: resolve here (seconds), post the link instantly, no GitHub Actions.
+  const pb = await pbYt(env, e.u, kind);
+  if (pb) {
+    await ytCachePut(env, vid, kind, { u: pb.u, host: "puruboy", t: pb.t || e.t || "", sz: pb.sz, fmt: pb.fmt, exp: "" });
+    const upTok = rndTok();
+    try { await putJSON(env, YT_UP_PREFIX + upTok, { c: chatId, u: pb.u, k: kind, t: pb.t || e.t || "", f: pb.fmt, exp: Date.now() + DL_SAV_TTL_MS }, env.DB ? { ttlMs: DL_SAV_TTL_MS } : undefined); } catch (_) {}
+    const card = await ytLinkCard(env, chatId, L, wmid, pb.u, kind, pb.t || e.t || "", pb.sz || 0, { fmt: pb.fmt }, upTok);
+    if (card) return;
+  }
   const jtok = rndTok();
   try { await putJSON(env, YT_JOB_PREFIX + jtok, { chat: chatId, mid: wmid, u: e.u, kind, t: String(e.t || "").slice(0, 110), ts: Date.now() }, env.DB ? { ttlMs: NH_JOB_TTL_MS } : undefined); } catch (_) {}
   try { await putJSON(env, busyKey, { tok: jtok, kind }, env.DB ? { ttlMs: NH_JOB_TTL_MS } : undefined); } catch (_) {}
@@ -1558,7 +1686,7 @@ export async function handleYtBuild(env, cbId, chatId, mid, arg) {
     const r = await fetch("https://api.github.com/repos/" + repo + "/dispatches", {
       method: "POST",
       headers: { authorization: "Bearer " + env.GH_DISPATCH, accept: "application/vnd.github+json", "content-type": "application/json", "user-agent": "kibo" },
-      body: JSON.stringify({ event_type: "yt", client_payload: { url: e.u, kind, cb, tok: jtok } }),
+      body: JSON.stringify({ event_type: "yt", client_payload: { url: e.u, kind, max_mb: YT_CAP_MB[kind] || 500, cb, tok: jtok } }),
       signal: AbortSignal.timeout(15000)
     });
     if (!r.ok) err = "github " + r.status;
@@ -1593,8 +1721,9 @@ export async function handleYtCb(request, env) {
   if (!/^https:\/\/\S+$/.test(url)) return jr(400, { ok: false, err: "url invalid" });
   const title = String(body.title || job.t || "").slice(0, 110);
   const size = Number(body.size) || 0;
-  await ytCachePut(env, vid, job.kind, { u: url, host: body.host, t: title, sz: size });
-  const ok = await ytDeliver(env, job.chat, L, job.mid, url, job.kind, title, size, false);
+  const meta = { fmt: String(body.fmt || "").slice(0, 12), exp: String(body.exp || "").slice(0, 40) };
+  await ytCachePut(env, vid, job.kind, { u: url, host: body.host, t: title, sz: size, fmt: meta.fmt, exp: meta.exp });
+  const ok = await ytDeliver(env, job.chat, L, job.mid, url, job.kind, title, size, false, meta);
   if (!ok) await reply(env, job.chat, L.ytLinkOnly(url));
   return jr(200, { ok: true });
 }

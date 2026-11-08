@@ -315,7 +315,7 @@ import { diveStart, diveSkip, diveStop, divePrac, diveModePick, diveIntercept, d
 import { handleShop, shopBuy, handleInv, invUse, handleGacha, gachaPull, handleCharms, charmEq, handleAch, bmSave, handleHub } from './src/feat-econ.js';
 import { rlAdd, rlView, rlToggle, rlDel, otdView, shortAdd, shortResolve, wrapView, pasteAdd, pasteGet, handleHn } from './src/feat-b8.js';
 import { SHORT_KEY } from './src/consts.js';
-import { handleDl, handleSong, handleSpotify, dlPlatform, delQsweep, handleDlPick, handleYts, handleYtsPick, handleYtBuild, handleYtCb, handleNh, handleNhSave, handleNhs, handleNhop, handleNhNzip, handleNhCb, nhLinkId, nhRun, nhWatchdog } from './src/feat-media.js';
+import { handleDl, handleSong, handleSpotify, dlPlatform, delQsweep, handleDlPick, handleYts, handleYtsPick, handleYtBuild, handleYtUpload, handleYtCb, handleNh, handleNhSave, handleNhs, handleNhop, handleNhNzip, handleNhCb, nhLinkId, nhRun, nhWatchdog } from './src/feat-media.js';
 import { handleSauceCmd, handleSaucePhoto } from './src/feat-sauce.js';
 import { handleHostCmd, handleHostPhoto, handleHostCb, handleHostCancel, hostTrack, hostLinkFind, handleHostFetch } from './src/feat-host.js';
 import { handleAnime, handleWx, handleNp } from './src/feat-ctx.js';
@@ -808,6 +808,10 @@ async function handleCallback(env, cb) {
   } else if (act === "ytb" && chatId) {
     // v2.76.0: 720p / MP3 build button from the YouTube menu
     await handleYtBuild(env, cb.id, chatId, mid, arg);
+  } else if (act === "ytup" && chatId) {
+    // v2.76.2: "send it into the chat" — the resolver link refuses Telegram's fetchers, so the
+    // Worker pulls the bytes and re-uploads them (only when the owner asks, it is slow)
+    await handleYtUpload(env, cb.id, chatId, mid, arg);
   } else if (act === "nhsave" && chatId) {
     await handleNhSave(env, cb.id, chatId, arg);
   } else if (act === "nhop" && chatId) {
