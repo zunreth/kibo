@@ -111,8 +111,17 @@ export async function tg(env, method, payload) {
   }
   if (!j || !j.ok) tgErrLog(env, method, j);
   if (j && j.ok && j.result && typeof j.result.message_id === "number") await trackNukeMsg(env, j.result.message_id);
-  if (env.__probe && j && j.ok) env.__probe.push({ mid: (j.result && j.result.message_id) || null, method: method, chat: payload.chat_id, text: String(payload.text || payload.caption || "").slice(0, 400) });
+  if (env.__probe && j && j.ok) env.__probe.push({ mid: (j.result && j.result.message_id) || null, method: method, chat: payload.chat_id, text: String(payload.text || payload.caption || "").slice(0, 400), kb: probeKb(payload.reply_markup) });
   return j;
+}
+
+// Probe helper: reduce an inline keyboard to [row][{text, data|url}] so /hook probe replies can be
+// asserted (callback flows have no other way to be exercised from outside).
+function probeKb(markup) {
+  let m = markup;
+  if (typeof m === "string") { try { m = JSON.parse(m); } catch (_) { return undefined; } }
+  if (!m || !Array.isArray(m.inline_keyboard)) return undefined;
+  return m.inline_keyboard.map(row => (row || []).map(b => (b && b.callback_data ? { t: b.text, d: b.callback_data } : { t: b && b.text, u: b && b.url })));
 }
 
 // B11: delivery fail TG = catet ke ring debug juga (keliatan di /debug log), bukan cuman console

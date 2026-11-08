@@ -134,9 +134,6 @@ export const FGSI_IG_URL = "https://fgsi.dpdns.org/api/downloader/instagram";
 export const FGSI_KEY = "fgsiapi-223c0a6d-6d";
 export const KYIO_BASE = "https://api.kyio.web.id";
 export const DL_CACHE_TTL_MS = 60 * 60 * 1000;
-export const DL_POLL_MS = 4500;
-export const DL_POLL_MAX = 8;
-export const DL_YT_FORMATS = ["1080", "720", "360", "mp3"];
 export const DL_MAX_LINKS = 20;
 export const DL_SEND_MAX = 15 * 1024 * 1024;
 export const DL_URL_SEND_MAX = 20 * 1024 * 1024; // TG bot by-URL = 20MB — gate known-size pake ini (band 15-20MB = by-URL doang, bytes fallback gak kuat)
@@ -150,6 +147,15 @@ export const DL_SAV_PREFIX = "dlsav:";
 export const DL_SAV_TTL_MS = 60 * 60 * 1000;
 export const DL_BIG_PREFIX = "dlbig:"; // URL ketahuan gak bisa dikirim (dipelajari dari pick gagal) → menu langsung Direct Link (v2.68.3)
 export const YT_PICK_PREFIX = "ytpick:"; // v2.68.8: token pick hasil /yts (URL video → /dl chain)
+// v2.76.0: YouTube delivery goes through the GHA builder (yt-dlp): third-party CDN links
+// cannot be handed to Telegram (those hosts block Telegram's fetchers), so the only files
+// that actually arrive are ones we upload ourselves to kappa.lol.
+export const YT_BUILD_PREFIX = "ytb:";     // menu token {url,title,author}, 1h TTL, shared by the 720p and MP3 buttons
+export const YT_JOB_PREFIX = "yt_job:";     // in-flight builder job {chat,mid,u,kind,ts} — single use
+export const YT_BUSY_PREFIX = "yt_busy:";   // anti-double: same video+kind still running → reject
+export const YT_CACHE_PREFIX = "yt_cache:"; // build result per video+kind → next tap is instant
+export const YT_CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+export const YT_CACHE_TTL_TMP_MS = 3 * 24 * 60 * 60 * 1000;
 // v2.69.13: album full-Worker VPS-independent — nhMeta cuma ke nhdl-w (mirror cin.guru + API fallback + cache); /nh tanpa format WAJIB album; gak ada egress VPS buat metadata
 export const NH_SAVE_PREFIX = "nhsav:";   // token button "Simpan ke vault" bawa {id,title,pages}
 export const NH_SAVES_KEY = "nh_saves";   // daftar referensi nh yang disimpan (JSON array per chat)
@@ -246,7 +252,7 @@ export const CHAIN_BONUS = 50;
 export const CHAIN_SHIELD = 1; // v2.68.14: hadiah tamat arc = +1 shield (bukan hangus/deadline; benefit permanen jaga streak)
 export const CHAIN_GEN_STALE_MS = 180000;
 export const SYS_CHAIN = "You generate a tiny 5-day quest arc for the user's Telegram bot companion. Reply with EXACTLY one line, pipe-separated, NO extra text, no markdown, no quotes: ArcName | step1 | step2 | step3 | step4 | step5. ArcName = a catchy title (max 6 words) for a fun, imaginative mini-adventure rooted in everyday life — habits, fitness, productivity, learning, a cozy hobby, or a small personal project. Frame it like a light RPG challenge so it feels exciting, but keep it believable: the 5 steps are a connected journey (day 1 an easy warm-up, days 2-4 climbing the arc, day 5 a satisfying finish). Each step = a short vivid label (max 8 words) the user can picture themselves doing. Make it fun, punchy, and a little playful — but NOT absurd, cartoonish, or slapstick (no talking animals, no stealing, no magical hijinks). Each step builds on the previous.";
-export const BOT_VER = "2.75.2";
+export const BOT_VER = "2.76.0";
 
 // edit-fitur v2.63.0
 export const EDIT_MARKER = "//";

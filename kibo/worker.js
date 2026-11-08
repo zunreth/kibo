@@ -315,7 +315,7 @@ import { diveStart, diveSkip, diveStop, divePrac, diveModePick, diveIntercept, d
 import { handleShop, shopBuy, handleInv, invUse, handleGacha, gachaPull, handleCharms, charmEq, handleAch, bmSave, handleHub } from './src/feat-econ.js';
 import { rlAdd, rlView, rlToggle, rlDel, otdView, shortAdd, shortResolve, wrapView, pasteAdd, pasteGet, handleHn } from './src/feat-b8.js';
 import { SHORT_KEY } from './src/consts.js';
-import { handleDl, handleSong, handleSpotify, dlPlatform, delQsweep, handleDlPick, handleYts, handleYtsPick, handleNh, handleNhSave, handleNhs, handleNhop, handleNhNzip, handleNhCb, nhLinkId, nhRun, nhWatchdog } from './src/feat-media.js';
+import { handleDl, handleSong, handleSpotify, dlPlatform, delQsweep, handleDlPick, handleYts, handleYtsPick, handleYtBuild, handleYtCb, handleNh, handleNhSave, handleNhs, handleNhop, handleNhNzip, handleNhCb, nhLinkId, nhRun, nhWatchdog } from './src/feat-media.js';
 import { handleSauceCmd, handleSaucePhoto } from './src/feat-sauce.js';
 import { handleHostCmd, handleHostPhoto, handleHostCb, handleHostCancel, hostTrack, hostLinkFind, handleHostFetch } from './src/feat-host.js';
 import { handleAnime, handleWx, handleNp } from './src/feat-ctx.js';
@@ -362,6 +362,7 @@ export default {
     }
     if (url.pathname === "/notify") return handleNotify(request, env);
     if (request.method === "POST" && url.pathname === "/nhcb") return handleNhCb(request, env); // v2.70.4: callback GHA builder zip
+    if (request.method === "POST" && url.pathname === "/ytcb") return handleYtCb(request, env); // v2.76.0: callback GHA builder yt-dlp
     if (request.method === "GET" && url.pathname === "/dbg") return handleDbgFlag(request, env);
     if (request.method !== "POST" || !url.pathname.startsWith("/hook/")) {
       return new Response("not found", { status: 404 });
@@ -383,7 +384,7 @@ export default {
     } finally { clearTimeout(toId); }
     if (isProbe) {
       for (const s of runEnv.__probe) if (s.mid) scheduleDelete(runEnv, s.chat, s.mid, parseInt(env.PROBE_DEL_MS || "", 10) || 15000);
-      return new Response(JSON.stringify({ ok: true, probe: true, sent: runEnv.__probe.length, out: runEnv.__probe.map(s => s.fn ? { method: s.method, mid: s.mid, text: s.text, fn: s.fn } : { method: s.method, mid: s.mid, text: s.text }) }), { headers: { "content-type": "application/json" } });
+      return new Response(JSON.stringify({ ok: true, probe: true, sent: runEnv.__probe.length, out: runEnv.__probe.map(s => s.fn ? { method: s.method, mid: s.mid, text: s.text, fn: s.fn } : { method: s.method, mid: s.mid, text: s.text, kb: s.kb }) }), { headers: { "content-type": "application/json" } });
     }
     return new Response("ok");
   },
@@ -804,6 +805,9 @@ async function handleCallback(env, cb) {
     await handleDlPick(env, cb.id, chatId, mid, arg);
   } else if (act === "ytpick" && chatId) {
     await handleYtsPick(env, cb.id, chatId, mid, arg);
+  } else if (act === "ytb" && chatId) {
+    // v2.76.0: 720p / MP3 build button from the YouTube menu
+    await handleYtBuild(env, cb.id, chatId, mid, arg);
   } else if (act === "nhsave" && chatId) {
     await handleNhSave(env, cb.id, chatId, arg);
   } else if (act === "nhop" && chatId) {
