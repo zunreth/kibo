@@ -1421,8 +1421,9 @@ export async function handleNhs(env, msg, chatId) {
   const rows = [];
   cur.slice(-20).reverse().forEach((x, i) => {
     lines.push((i + 1) + ". <b>" + (x.t ? hesc(String(x.t).slice(0, 60)) : "NH #" + x.id) + "</b>");
-    const dl = nhDl(env, x.id, "zip");
-    rows.push([{ text: L.nhsOpen, callback_data: "nhop:" + x.id }, dl ? { text: L.nhsDl, url: dl } : { text: L.nhsZip, callback_data: "nhnz:" + x.id }]);
+    // v2.75.1: tombol "link file" mati diam-diam sejak NH_DL dicabut (2.70.5) — yang beneran ada cuma
+    // open album + build ZIP, jadi dua itu doang yang ditampilkan.
+    rows.push([{ text: L.nhsOpen, callback_data: "nhop:" + x.id }, { text: L.nhsZip, callback_data: "nhnz:" + x.id }]);
   });
   return tg(env, "sendMessage", { chat_id: chatId, text: lines.join("\n"), parse_mode: "HTML", reply_markup: { inline_keyboard: rows } });
 }
