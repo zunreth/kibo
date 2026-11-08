@@ -313,7 +313,7 @@ export async function* chatStream(env, messages, maxTokens, timeoutMs = 60000) {
       headers: { "content-type": "application/json", "authorization": "Bearer " + cfg.key },
       signal: AbortSignal.timeout(timeoutMs),
       body: JSON.stringify({ model: cfg.model, messages: messages, max_tokens: maxTokens, stream: true })
-    });
+    }, env);
     if (!r.ok || !r.body) { dbgLog(env, "ai", "ERR model=" + cfg.model + " HTTP " + r.status); throw new Error("AI provider HTTP " + r.status); }
     const cfilt = makeThinkFilter();
     const qf2 = makeQuoteFilter();
@@ -644,6 +644,30 @@ export async function kvQuotaReal(env, acct, token) {
   } catch (_) { return null; }
 }
 
+import { cronLedger, cronStaleAt, CRON_JOBS } from './cron-ledger.js';
+
+// R-07: the pruning instrument. Everything registered is compared against what was actually called
+// in the last 30 days, so removing a feature becomes a data decision instead of a feeling.
+export async function renderUsageView(env) {
+  const L = await uiLang(env);
+  const cu = (await getJSON(env, "cmduse", null)) || { d: {} };
+  const days = Object.keys(cu.d || {}).sort().slice(-30);
+  const agg = {};
+  let total = 0;
+  for (const dd of days) for (const [k, n] of Object.entries(cu.d[dd] || {})) { agg[k] = (agg[k] || 0) + n; total += n; }
+  const rows = Object.entries(agg).sort((a, b) => b[1] - a[1]);
+  const known = new Set();
+  for (const line of L.helpArr || []) {
+    for (const m of String(line).matchAll(/(?:^|[\s>(\u00b7])(\/[a-z][a-z0-9_]*)/gi)) known.add(m[1].toLowerCase());
+  }
+  const zero = [...known].filter(c => !agg[c]).sort();
+  const head = L.sysUsageTitle + "\n" + (rows.length
+    ? rows.slice(0, 10).map(r => "<code>" + esc(L.sysCmdRow(r[0], r[1])) + "</code>").join("\n") + "\n" + L.sysCmdTotal(total)
+    : L.sysUsageNone);
+  const ztxt = zero.length ? "\n\n" + L.sysUsageZero(zero.length) + "\n<code>" + esc(zero.join(" ")) + "</code>" : "";
+  return { text: head + ztxt, markup: { inline_keyboard: [[{ text: L.back, callback_data: "nav:stats" }, { text: L.home, callback_data: "menu" }]] } };
+}
+
 export async function handleSys(env, chatId, mid) {
   const v = await sysView(env);
   if (mid) return tg(env, "editMessageText", { chat_id: chatId, message_id: mid, text: v.text, parse_mode: "HTML", reply_markup: v.markup });
@@ -728,6 +752,15 @@ export async function sysView(env) {
     L.sysMisc(fmtDur(Date.now() - INCEPTION), sysInfoOf(env).cron) + "\n" +
     L.sysSecrets(secs.filter(x => x[1]).map(x => x[0]).join(", "));
 
+  let cronSec = "";
+  try {
+    const led = await cronLedger(env);
+    const rows = CRON_JOBS.map(([j]) => [j, led[j]]).filter(x => x[1] && x[1].ts);
+    cronSec = L.sysCronTitle + "\n" + (rows.length
+      ? rows.map(([j, b]) => (b.ok && !cronStaleAt(j, b.ts) ? "\u2705 " : "\u26A0\uFE0F ") + "<code>" + esc(j) + "</code> \u00b7 " + esc(fmtDur(Date.now() - b.ts)) + (b.fail ? " \u00b7 " + b.fail + " fail" : "")).join("\n")
+      : L.sysCronNone);
+  } catch (_) { cronSec = ""; }
+
   let cmdSec = L.sysCmdEmpty;
   try {
     const cu = (await getJSON(env, "cmduse", null)) || { d: {} };
@@ -741,8 +774,8 @@ export async function sysView(env) {
     }
   } catch (_) {}
   return {
-    text: [L.sysTitle, mainSec, d1Sec, partnerSec, L.sysAI(cfai.model, aiHost), wh, cmdSec, workerSec, L.sysOtp(sysInfoOf(env).zone)].filter(Boolean).join(SEP) + L.sysFoot,
-    markup: { inline_keyboard: [[{ text: L.back, callback_data: "nav:stats" }, { text: L.home, callback_data: "menu" }]] }
+    text: [L.sysTitle, mainSec, d1Sec, partnerSec, L.sysAI(cfai.model, aiHost), wh, cronSec, cmdSec, workerSec, L.sysOtp(sysInfoOf(env).zone)].filter(Boolean).join(SEP) + L.sysFoot,
+    markup: { inline_keyboard: [[{ text: L.sysUsageBtn, callback_data: "nav:usage" }, { text: L.back, callback_data: "nav:stats" }, { text: L.home, callback_data: "menu" }]] }
   };
 }
 

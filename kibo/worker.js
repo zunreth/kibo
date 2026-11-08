@@ -89,6 +89,7 @@ import {
   nukeSleep,
 } from './src/base.js';
 import { askSet, askGet, askClear } from './src/ask.js';
+import { cronBeat } from './src/cron-ledger.js';
 const ASK_ROUTES = { rp: rpAsk, sfan: gameFanAsk };
 import {
   STAMP_LAST,
@@ -254,6 +255,7 @@ import {
   renderHelpCat,
   renderProfile,
   renderStatsView,
+  renderUsageView,
   renderMeView,
   renderUiLangView,
   handleStart,
@@ -387,7 +389,18 @@ export default {
   async scheduled(event, env, ctx) {
     setLiveCtx(ctx);
     try { if (!env.__kvw) { env.KV = wrapStore(env); env.__kvw = true; } } catch (_) {}
-    ctx.waitUntil(runCron(env).catch(e => onUpdErr(env, e)).then(() => Promise.all([flushStatsBuf(env), flushNukeBuf(env), d1Sweep(env), shadowSync(env), delQsweep(env), nhWatchdog(env).catch(() => {}), diveCronTick(env).catch(() => {}), divePreGen(env).catch(() => {}), gameIdleTick(env).catch(() => {})])));
+    // R-02: every job leaves a heartbeat, so a job that stops firing becomes visible in /sys instead
+    // of being noticed weeks later. A failing job also reports through the R-05 error path.
+    const beat = (name, p) => Promise.resolve(p).then(
+      () => cronBeat(env, name, true),
+      e => { onUpdErr(env, e); return cronBeat(env, name, false, e); }
+    );
+    ctx.waitUntil(beat("cron", runCron(env)).then(() => Promise.all([
+      beat("stats", flushStatsBuf(env)), beat("nuke", flushNukeBuf(env)), beat("d1", d1Sweep(env)),
+      beat("shadow", shadowSync(env)), beat("delq", delQsweep(env)),
+      beat("nhwatch", nhWatchdog(env).catch(() => {})), beat("dive", diveCronTick(env).catch(() => {})),
+      beat("divegen", divePreGen(env).catch(() => {})), beat("gameidle", gameIdleTick(env).catch(() => {}))
+    ])));
   }
 };
 
@@ -711,6 +724,7 @@ async function handleCallback(env, cb) {
       view = c ? renderCharMems(c, await getJSON(env, CMEM_PREFIX + c.id, []), L) : { text: L.noActiveChar, markup: { inline_keyboard: navRow(1, "nav:char") } };
     }
     else if (arg === "stats") view = await renderStatsView(env);
+    else if (arg === "usage") view = await renderUsageView(env);
     else if (arg === "aistats") view = await renderAistatsHub(env);
     else if (arg === "profile") view = await renderProfile(env);
     else if (arg === "quest") view = await questView(env);

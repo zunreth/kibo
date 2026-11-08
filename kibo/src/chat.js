@@ -475,7 +475,7 @@ export async function maybeAutoCont(env, raw) {
     const owner = Number(await env.KV.get("owner_chat")) || 0;
     if (!owner) return;
     const upd = { update_id: now, message: { message_id: 990000000 + (ch.n || 0), date: Math.floor(now / 1000), chat: { id: owner, type: "private" }, from: { id: owner, is_bot: false, first_name: "owner" }, text: "/continue" } };
-    LIVE_CTX.waitUntil(fetch((env.SELF_BASE || SELF_BASE) + "/hook/" + env.HOOK_PATH, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(upd) }).then((r) => { if (!r.ok) throw new Error("selfhook " + r.status); }).catch(() => {}));
+    LIVE_CTX.waitUntil(fetch((env.SELF_BASE || SELF_BASE) + "/hook/" + env.HOOK_PATH, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(upd), signal: AbortSignal.timeout(180000) }).then((r) => { if (!r.ok) throw new Error("selfhook " + r.status); }).catch(() => {}));
   } catch (_) {}
 }
 

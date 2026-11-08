@@ -1,4 +1,4 @@
-import { tg, reply, getJSON, putJSON, scheduleDelete, tgErrLog, NH_FMT_ALIAS, nhDefFmt, nhHost, nhPdfQ } from "./base.js";
+import { tg, reply, getJSON, putJSON, scheduleDelete, tgErrLog, tgUpTmo, NH_FMT_ALIAS, nhDefFmt, nhHost, nhPdfQ } from "./base.js";
 import { uiLang, SEP_LINE } from "./ui.js";
 import { UA, UA_BOT, DL_CACHE_PREFIX, DL_CACHE_TTL_MS, DL_POLL_MS, DL_POLL_MAX, DL_MAX_LINKS, DL_YT_FORMATS, DL_SEND_MAX, DL_URL_SEND_MAX, DL_SEND_PHOTO_MAX, FGSI_IG_URL, FGSI_KEY, KYIO_BASE, DL_DEL_MS, DELQ_KEY, DL_MENU_TTL_MS, DL_PICK_PREFIX, DL_SAV_PREFIX, DL_SAV_TTL_MS, DL_BIG_PREFIX, YT_PICK_PREFIX, YTS_MAX, NH_SAVE_PREFIX, NH_SAVES_KEY, NH_AUTODEL_MS, NH_JOB_PREFIX, NH_JOB_TTL_MS, NH_BUSY_PREFIX, NH_KEEP_PREFIX, NH_CACHE_PREFIX, NH_CACHE_TTL_MS, NH_CACHE_TTL_TMP_MS, NH_STAT_PREFIX, NH_STAT_TTL_MS, NH_DEAD_MS, VAULT_CHAT_KEY, FILE_INDEX_KEY } from "./consts.js";
 
@@ -576,7 +576,7 @@ async function audioUpload(env, chatId, url, title, fcap, tok) {
   form.append("reply_markup", JSON.stringify({ inline_keyboard: auRows }));
   form.append("audio", new Blob(f.chunks, { type: ct || "audio/mp4" }), safe + "." + audioExt(ct));
   try {
-    const r = await fetch("https://api.telegram.org/bot" + env.TG_TOKEN + "/sendAudio", { method: "POST", body: form });
+    const r = await fetch("https://api.telegram.org/bot" + env.TG_TOKEN + "/sendAudio", { method: "POST", body: form, signal: tgUpTmo(env) });
     const j = await r.json().catch(() => null);
     if (!j || !j.ok) tgErrLog(env, "sendAudio", j);
     if (env.__probe && j && j.ok) env.__probe.push({ mid: (j.result && j.result.message_id) || null, method: "sendAudio", chat: chatId, text: String(fcap || "").slice(0, 400), fn: (j.result && j.result.audio && j.result.audio.file_name) || (safe + "." + audioExt(ct)) });
@@ -673,7 +673,7 @@ async function videoUpload(env, chatId, url, fcap, tok) {
   if (dlUrlOk(url)) vuRows.push([{ text: "🔗 Direct Link", url }]);
   form.append("reply_markup", JSON.stringify({ inline_keyboard: vuRows }));
   try {
-    const r = await fetch("https://api.telegram.org/bot" + env.TG_TOKEN + "/sendVideo", { method: "POST", body: form });
+    const r = await fetch("https://api.telegram.org/bot" + env.TG_TOKEN + "/sendVideo", { method: "POST", body: form, signal: tgUpTmo(env) });
     const j = await r.json().catch(() => null);
     if (!j || !j.ok) tgErrLog(env, "sendVideo", j);
     if (env.__probe && j && j.ok) env.__probe.push({ mid: (j.result && j.result.message_id) || null, method: "sendVideo", chat: chatId, text: String(fcap || "").slice(0, 400) });
@@ -694,7 +694,7 @@ async function photoUpload(env, chatId, url, cap, mark) {
   if (mark) form.append("reply_markup", JSON.stringify(mark));
   form.append("photo", new Blob([buf], { type: "image/jpeg" }), "photo.jpg");
   try {
-    const r = await fetch("https://api.telegram.org/bot" + env.TG_TOKEN + "/sendPhoto", { method: "POST", body: form });
+    const r = await fetch("https://api.telegram.org/bot" + env.TG_TOKEN + "/sendPhoto", { method: "POST", body: form, signal: tgUpTmo(env) });
     const j = await r.json().catch(() => null);
     if (!j || !j.ok) tgErrLog(env, "sendPhoto", j);
     if (env.__probe && j && j.ok) env.__probe.push({ mid: (j.result && j.result.message_id) || null, method: "sendPhoto", chat: chatId, text: String(cap || "").slice(0, 400) });

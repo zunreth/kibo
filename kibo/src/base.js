@@ -78,6 +78,10 @@ export function mdTg(s) {
 
 // NF-251019-4: shared env-knobbed upstream timeout (user-facing interactive fetches)
 export const upstreamTmo = env => AbortSignal.timeout(parseInt((env && env.UPSTREAM_TIMEOUT_MS) || "", 10) || 15000);
+// R-01: a Telegram call that never answers must never be able to hang a handler. JSON methods are
+// fast; multipart uploads are legitimately slow, so they get their own (much longer) budget.
+export const tgTmo = env => AbortSignal.timeout(parseInt((env && env.TG_TIMEOUT_MS) || "", 10) || 20000);
+export const tgUpTmo = env => AbortSignal.timeout(parseInt((env && env.TG_UPLOAD_TIMEOUT_MS) || "", 10) || 240000);
 
 export async function getJSON(env, k, d) {
   const v = await env.KV.get(k);
@@ -95,11 +99,14 @@ export async function tg(env, method, payload) {
     const r = await fetch("https://api.telegram.org/bot" + env.TG_TOKEN + "/" + method, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify(payload)
+      body: JSON.stringify(payload),
+      signal: tgTmo(env)
     });
     j = await r.json().catch(() => null);
   } catch (e) {
     dbgLog(env, "tg", method + " THREW " + String((e && e.message) || e).slice(0, 120));
+    // Tagged so the error reporter does not try to deliver its own report over a dead channel.
+    try { e.__tg = true; } catch (_) {}
     throw e; // propagate ke caller persis kayak dulu
   }
   if (!j || !j.ok) tgErrLog(env, method, j);

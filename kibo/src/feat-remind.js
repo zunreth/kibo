@@ -782,7 +782,7 @@ export async function remindMsg(env, id, text, nagLevel, mode) {
         { role: "system", content: sys },
         { role: "user", content: "(system note for AI) " + (lifeHint ? "life event" : mode === "bet" ? "bet" : mode ? "quest" : "reminder message") + " '" + text + "' " + (mode === "questDone" ? "was just completed by the user (button)" : mode === "questSkip" ? "was just skipped by the user" : lifeHint ? "was just recorded by the system" : "was just sent to the user by you") + " (separate system message, the info has been delivered). " + hint + " Now write ONE Telegram message from you (as the character) to the user: 1-2 sentences of natural reaction like a normal chat. Do NOT repeat system formatting, markdown **bold** is FORBIDDEN, do not mention the words 'reminder', '#id', or system terms." }
       ] })
-    });
+    }, env);
     if (!r.ok || !r.body) return "";
     let out = "";
     for await (const j of sseObj(r.body)) {

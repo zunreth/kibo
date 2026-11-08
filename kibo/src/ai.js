@@ -79,7 +79,7 @@ import {
   nukeGone,
   nukeSleep,
 } from './base.js';
-import { tgErrLog } from './base.js';
+import { tgErrLog, tgUpTmo } from './base.js';
 import { dbgLog } from './feat-debug.js';
 import {
   STAMP_LAST,
@@ -477,12 +477,37 @@ export function stripQuoteMeta(s) {
   return out.join("\n");
 }
 
-export async function aiFetchRetry(url, init) {
-  let r = await fetch(url, init).catch(e => ({ __th: e }));
+export const AI_LOOP_MAX = 8, AI_LOOP_TTL_S = 600;
+export function aiLoopHash(s) {
+  let h = 2166136261;
+  for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); }
+  return (h >>> 0).toString(36);
+}
+
+export async function aiFetchRetry(url, init, env) {
+  // R-01: callers are supposed to pass a signal, but a forgotten one must not hang the turn forever.
+  const req = init && init.signal ? init : Object.assign({}, init, { signal: AbortSignal.timeout(80000) });
+  // R-08: the same request fired repeatedly in a short window is a bug (a retry storm, a double-fired
+  // /regenerate), not a conversation. Distinct prompts are never counted, and nothing is throttled.
+  if (env && env.KV) {
+    try {
+      const h = aiLoopHash(url + "|" + String(req.body || ""));
+      const k = "ai_loop:" + h;
+      const n = (parseInt((await env.KV.get(k)) || "0", 10) || 0) + 1;
+      if (n > AI_LOOP_MAX) {
+        dbgLog(env, "ai", "loop-guard tripped x" + n + " " + h);
+        throw new Error("AI loop guard: identical request repeated " + n + "x within " + Math.round(AI_LOOP_TTL_S / 60) + " min");
+      }
+      await env.KV.put(k, String(n), { ttlMs: AI_LOOP_TTL_S * 1000, expirationTtl: AI_LOOP_TTL_S });
+    } catch (e) {
+      if (/loop guard/.test(String(e && e.message))) throw e;
+    }
+  }
+  let r = await fetch(url, { ...req, signal: req.signal }).catch(e => ({ __th: e }));
   if (r.__th || (!r.ok && r.status >= 500)) {
-    if (init && init.signal && init.signal.aborted) { if (r.__th) throw r.__th; return r; }
+    if (req.signal && req.signal.aborted) { if (r.__th) throw r.__th; return r; }
     const why = r.__th ? "throw " + String((r.__th && r.__th.message) || r.__th).slice(0, 60) : "HTTP " + r.status;
-    r = await fetch(url, init);
+    r = await fetch(url, { ...req, signal: req.signal });
     console.log("[AI] retry #2 (" + why + ")");
   }
   return r;
@@ -505,7 +530,7 @@ export async function* agentChat(env, msgs, chatId, extSig, turnTs, startMode, n
       headers: { "content-type": "application/json", "authorization": "Bearer " + cfg.key },
       signal: extSig && typeof AbortSignal.any === "function" ? AbortSignal.any([extSig, AbortSignal.timeout(80000)]) : AbortSignal.timeout(80000),
       body: JSON.stringify({ model: cfg.model, messages: msgs, max_tokens: step > 0 ? 2500 : 1200, stream: true, tools: noTools ? undefined : TOOLS_AGENT })
-    });
+    }, env);
     if (!r.ok || !r.body) { dbgLog(env, "ai", "ERR model=" + cfg.model + " HTTP " + r.status + " step=" + step); throw new Error("AI provider HTTP " + r.status); }
     let finish = "";
     let content = "";
@@ -600,7 +625,7 @@ export async function* agentChat(env, msgs, chatId, extSig, turnTs, startMode, n
       headers: { "content-type": "application/json", "authorization": "Bearer " + cfg.key },
       signal: extSig && typeof AbortSignal.any === "function" ? AbortSignal.any([extSig, AbortSignal.timeout(80000)]) : AbortSignal.timeout(80000),
       body: JSON.stringify({ model: cfg.model, messages: clean, max_tokens: 1500, stream: true })
-    });
+    }, env);
     if (r2.ok && r2.body) {
       let out = "";
       let think2 = 0;
@@ -768,10 +793,10 @@ export async function tgUpload(env, chatId, buf) {
     fd.append(field, new Blob([buf], { type: "audio/wav" }), "reply.wav");
     return fd;
   };
-  let r = await fetch("https://api.telegram.org/bot" + env.TG_TOKEN + "/sendVoice", { method: "POST", body: mk("voice") });
+  let r = await fetch("https://api.telegram.org/bot" + env.TG_TOKEN + "/sendVoice", { method: "POST", body: mk("voice"), signal: tgUpTmo(env) });
   let j = await r.json().catch(() => null);
   if (!j || !j.ok) {
-    r = await fetch("https://api.telegram.org/bot" + env.TG_TOKEN + "/sendAudio", { method: "POST", body: mk("audio") });
+    r = await fetch("https://api.telegram.org/bot" + env.TG_TOKEN + "/sendAudio", { method: "POST", body: mk("audio"), signal: tgUpTmo(env) });
     j = await r.json().catch(() => null);
   }
   if (!j || !j.ok) { tgErrLog(env, "tgUpload", j); throw new Error((j && j.description) || "HTTP " + r.status); }

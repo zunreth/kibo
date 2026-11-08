@@ -98,13 +98,37 @@ export async function stampAlive(env) {
 export let QUOTA_NOTED = false;
 export async function onUpdErr(env, e) {
   const msg = String((e && e.message) || e || "");
-  if (!/10048|usage limit/i.test(msg)) return console.error("handleUpdate:", (e && e.stack) || e);
+  if (!/10048|usage limit/i.test(msg)) {
+    console.error("handleUpdate:", (e && e.stack) || e);
+    return errDm(env, e);
+  }
   console.error("handleUpdate(kv-quota):", msg.slice(0, 120));
   if (QUOTA_NOTED) return;
   QUOTA_NOTED = true;
   try {
     const owner = await env.KV.get("owner_chat");
     if (owner) await tg(env, "sendMessage", { chat_id: owner, text: "\u26A1 Cloudflare KV free quota for today is used up \u2014 buttons/replies may go quiet until the 07:00 WIB reset. Chats still get through, but saved state (history/reminders) may not be recorded for a while." });
+  } catch (_) {}
+}
+
+export const ERRDM_TTL_S = 3600;
+
+// R-05: a handler that throws reaches the owner instead of dying in the CF console. Rate limited to
+// one message per hour per error site, so a failing loop cannot turn into a message storm.
+export async function errDm(env, e) {
+  try {
+    // A Telegram delivery failure cannot be reported over Telegram, and reporting it would add a
+    // doomed send to an already-bounded retry path.
+    if (e && e.__tg) return;
+    const owner = Number(await env.KV.get("owner_chat")) || 0;
+    if (!owner) return;
+    const stack = String((e && e.stack) || e || "").split("\n");
+    const site = (stack.find(l => /\bat\b/.test(l) && !/onUpdErr|errDm/.test(l)) || stack[0] || "?").trim().slice(0, 140);
+    const key = "errdm:" + site.replace(/[^\w./:-]+/g, "_").slice(0, 80);
+    if (await env.KV.get(key)) return;
+    await env.KV.put(key, "1", { ttlMs: ERRDM_TTL_S * 1000, expirationTtl: ERRDM_TTL_S });
+    const text = "\u274C <b>handler error</b>\n<code>" + esc(String((e && e.message) || e || "?").slice(0, 200)) + "</code>\n<code>" + esc(site) + "</code>";
+    await tg(env, "sendMessage", { chat_id: owner, text: text, parse_mode: "HTML", reply_markup: { inline_keyboard: [[{ text: "\u{1F41E} /debug", callback_data: "dbg:log" }]] } });
   } catch (_) {}
 }
 

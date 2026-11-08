@@ -82,7 +82,7 @@ import {
   nukeGone,
   nukeSleep,
 } from './base.js';
-import { tgErrLog } from './base.js';
+import { tgErrLog, tgTmo, tgUpTmo } from './base.js';
 import {
   STAMP_LAST,
   stampAlive,
@@ -182,7 +182,8 @@ export async function vaultTg(env, method, payload) {
   const r = await fetch("https://api.telegram.org/bot" + env.TG_TOKEN + "/" + method, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify(payload)
+    body: JSON.stringify(payload),
+    signal: tgTmo(env)
   });
   const j = await r.json().catch(() => null);
   if (!j || !j.ok) tgErrLog(env, method, j);
@@ -400,7 +401,7 @@ export async function vaultBackup(env, chatId, silent) {
     form.append("chat_id", String(v.id));
     form.append("caption", "\u{1F4BE} snapshot " + day + (silent ? " (auto)" : ""));
     form.append("document", new Blob([payload], { type: "application/json" }), "kibo-snapshot-" + day + ".json");
-    const r = await fetch("https://api.telegram.org/bot" + env.TG_TOKEN + "/sendDocument", { method: "POST", body: form });
+    const r = await fetch("https://api.telegram.org/bot" + env.TG_TOKEN + "/sendDocument", { method: "POST", body: form, signal: tgUpTmo(env) });
     const j = await r.json().catch(() => null);
     if (!j || !j.ok) tgErrLog(env, "sendDocument", j);
     if (!j || !j.ok || !j.result || !j.result.document) {
