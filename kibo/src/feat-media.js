@@ -1050,10 +1050,13 @@ export async function nhSearch(env, chatId, query) {
   const hits = nhParseSearch(html, NH_SEARCH_MAX);
   if (!hits.length) return reply(env, chatId, L.nhSearchEmpty(hesc(q)));
   const lines = [L.nhSearchHead(hesc(q)), ""];
+  // v2.75.2: caption carries the full numbered list; the buttons are just numbers so a row fits
+  // five of them and the keyboard stays small (owner: "biar muat banyak").
   const rows = [];
   hits.forEach((h, i) => {
     lines.push((i + 1) + ". " + hesc(h.title));
-    rows.push([{ text: (i + 1) + ". " + h.title.slice(0, 44), callback_data: "nh:" + h.id }]);
+    if (i % 5 === 0) rows.push([]);
+    rows[rows.length - 1].push({ text: String(i + 1), callback_data: "nh:" + h.id });
   });
   lines.push("", L.nhSearchHint);
   return tg(env, "sendMessage", { chat_id: chatId, text: lines.join("\n"), parse_mode: "HTML", reply_markup: { inline_keyboard: rows } });
@@ -1415,6 +1418,10 @@ export async function handleNhNzip(env, cbId, chatId, idRaw) {
 
 export async function handleNhs(env, msg, chatId) {
   const L = await uiLang(env);
+  // v2.75.2: `/nhs <query>` = search (owner mental model: nhs = nh-search). Bare `/nhs` stays the
+  // saved list, because that is what the button "💾 Save" has always fed.
+  const query = (msg.text || "").replace(/^\/\S+\s*/, "").trim();
+  if (query) return nhSearch(env, chatId, query);
   let cur = []; try { cur = JSON.parse(await env.KV.get(NH_SAVES_KEY) || "[]"); } catch (_) {}
   if (!cur.length) return reply(env, chatId, L.nhsEmpty);
   const lines = [L.nhsHead(cur.length), ""];
