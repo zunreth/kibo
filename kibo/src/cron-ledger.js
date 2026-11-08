@@ -25,7 +25,19 @@ export async function cronLedger(env) {
   return (await getJSON(env, CRON_LEDGER_KEY, null)) || {};
 }
 
+// The ledger is one JSON blob, so two beats running at the same time (they do: every job is fired
+// through one Promise.all) would each read-modify-write it and clobber each other — heartbeats go
+// missing, ages drift, and a healthy job starts looking stale. Every beat is therefore queued
+// through this chain: reads and writes stay strictly sequential inside the isolate.
+let BEAT_CHAIN = Promise.resolve();
+
 export async function cronBeat(env, job, ok, err) {
+  const run = BEAT_CHAIN.then(() => beatOnce(env, job, ok, err));
+  BEAT_CHAIN = run.then(() => {}, () => {});
+  return run;
+}
+
+async function beatOnce(env, job, ok, err) {
   const now = Date.now();
   let led;
   try { led = await cronLedger(env); } catch (_) { led = {}; }
