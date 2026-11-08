@@ -1612,10 +1612,10 @@ const btchAudio = (env, url) => btchYt(env, url, "mp3");
 
 // Resolver bytes → Telegram. 40 MB is our own ceiling (one isolate holds the blob); past that the
 // link is the honest answer, because Telegram cannot fetch these hosts itself.
-async function ytUploadResolved(env, chatId, L, mid, url, kind, title, fmt) {
+async function ytUploadResolved(env, chatId, L, mid, url, kind, title, fmt, tmo) {
   let f = null;
   try {
-    const r = await fetch(url, { headers: { "user-agent": UA }, signal: AbortSignal.timeout(90000) });
+    const r = await fetch(url, { headers: { "user-agent": UA }, signal: AbortSignal.timeout(tmo || 90000) });
     const ct = (r.headers.get("content-type") || "").split(";")[0].trim().toLowerCase();
     if (env.__probe) env.__probe.push({ mid: null, method: "ytfetch", chat: chatId, text: r.status + " " + ct + " " + (r.headers.get("content-length") || "?") });
     if (r.ok && r.body) {
@@ -1698,9 +1698,12 @@ export async function handleYtBuild(env, cbId, chatId, mid, arg) {
   try { busy = await getJSON(env, busyKey, null); } catch (_) { busy = null; }
   if (busy && busy.tok) { await tg(env, "answerCallbackQuery", { callback_query_id: cbId, text: L.ytBusy }); return; }
   const hit = await ytCacheGet(env, vid, kind);
-  if (hit) {
+  if (hit && /^(btch|vidsnap)/.test(String(hit.host || ""))) {
+    // Dead links must not be replayed: btch/vidsnap 403 in a browser, so forget the entry.
+    try { await env.KV.delete(YT_CACHE_PREFIX + vid + ":" + kind); } catch (_) {}
+  } else if (hit) {
     await tg(env, "answerCallbackQuery", { callback_query_id: cbId, text: L.ytCachePop });
-    if (/^(puruboy|btch|vidsnap)/.test(String(hit.host || "")) || /vidsnap\.app|ytdownloader\.tech/.test(String(hit.u || ""))) {
+    if (/^puruboy/.test(String(hit.host || "")) || /ytdownloader\.tech/.test(String(hit.u || ""))) {
       // Telegram cannot fetch these hosts — same card + "send to chat" as the first time
       const upTok = rndTok();
       try { await putJSON(env, YT_UP_PREFIX + upTok, { c: chatId, u: hit.u, k: kind, t: hit.t || e.t || "", f: hit.fmt || "", exp: Date.now() + DL_SAV_TTL_MS }, env.DB ? { ttlMs: DL_SAV_TTL_MS } : undefined); } catch (_) {}
@@ -1717,14 +1720,10 @@ export async function handleYtBuild(env, cbId, chatId, mid, arg) {
   else { const wj = await reply(env, chatId, L.ytBuildWait(kind)); wmid = (wj && wj.result && wj.result.message_id) || 0; }
   // Primary path: resolve here (seconds), post the link instantly, no GitHub Actions.
   if (kind === "btch") {
-    // Owner's explicit second source: btch's proxy, one file per kind, but the bytes are fast
-    // enough to just upload them (41 MB in 1.4 s when measured).
+    // Owner's second source. Its proxy 403s in a browser ("Access to api.vidsnap.app was denied")
+    // and throttles to ~300 KB for us, so it is upload-only: never hand out a link we know is dead.
     const b = await btchYt(env, e.u, "video");
-    if (b) {
-      const ok = await ytUploadResolved(env, chatId, L, wmid, b.u, "720", b.t || e.t || "", "BTCH");
-      if (ok) return;
-      if (await ytLinkCard(env, chatId, L, wmid, b.u, "720", b.t || e.t || "", b.sz || 0, { fmt: "BTCH" })) return;
-    }
+    if (b && await ytUploadResolved(env, chatId, L, wmid, b.u, "720", b.t || e.t || "", "BTCH", 30000)) return;
   }
   const pb = kind === "mp3" || kind === "btch" ? null : await pbYt(env, e.u, kind);
   if (pb) {
@@ -1735,15 +1734,10 @@ export async function handleYtBuild(env, cbId, chatId, mid, arg) {
     if (card) return;
   }
   if (kind === "mp3") {
-    // Audio: btch hands out a fast mp3 proxy; puruboy's audio endpoint is the slow one (~90 s).
-    // Card first, bytes only when asked — a stalled proxy must never look like a hang.
-    const a = await btchAudio(env, e.u) || await pbYt(env, e.u, "mp3", 1, 35000);
-    if (a) {
-      await ytCachePut(env, vid, kind, { u: a.u, host: "btch", t: a.t || e.t || "", sz: a.sz, fmt: "MP3" });
-      const upTok = rndTok();
-      try { await putJSON(env, YT_UP_PREFIX + upTok, { c: chatId, u: a.u, k: "mp3", t: a.t || e.t || "", f: "MP3", exp: Date.now() + DL_SAV_TTL_MS }, env.DB ? { ttlMs: DL_SAV_TTL_MS } : undefined); } catch (_) {}
-      if (await ytLinkCard(env, chatId, L, wmid, a.u, "mp3", a.t || e.t || "", a.sz || 0, { fmt: "MP3" }, upTok)) return;
-    }
+    // Audio: every provider proxy either stalls (~300 KB) or 403s, so try the bytes once and fall
+    // through to the confirmed GitHub build instead of handing over a dead link.
+    const a = await btchAudio(env, e.u);
+    if (a && await ytUploadResolved(env, chatId, L, wmid, a.u, "mp3", a.t || e.t || "", "MP3", 30000)) return;
   }
   // Resolver is out: ask before spending a GitHub Actions run — never dispatch on our own.
   const gtok = rndTok();
