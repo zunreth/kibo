@@ -90,6 +90,7 @@ import {
 } from './src/base.js';
 import { askSet, askGet, askClear } from './src/ask.js';
 import { cronBeat } from './src/cron-ledger.js';
+import { hcPing } from './src/health.js';
 const ASK_ROUTES = { rp: rpAsk, sfan: gameFanAsk };
 import {
   STAMP_LAST,
@@ -390,17 +391,29 @@ export default {
     setLiveCtx(ctx);
     try { if (!env.__kvw) { env.KV = wrapStore(env); env.__kvw = true; } } catch (_) {}
     // R-02: every job leaves a heartbeat, so a job that stops firing becomes visible in /sys instead
-    // of being noticed weeks later. A failing job also reports through the R-05 error path.
-    const beat = (name, p) => Promise.resolve(p).then(
-      () => cronBeat(env, name, true),
-      e => { onUpdErr(env, e); return cronBeat(env, name, false, e); }
-    );
-    ctx.waitUntil(beat("cron", runCron(env)).then(() => Promise.all([
-      beat("stats", flushStatsBuf(env)), beat("nuke", flushNukeBuf(env)), beat("d1", d1Sweep(env)),
-      beat("shadow", shadowSync(env)), beat("delq", delQsweep(env)),
-      beat("nhwatch", nhWatchdog(env).catch(() => {})), beat("dive", diveCronTick(env).catch(() => {})),
-      beat("divegen", divePreGen(env).catch(() => {})), beat("gameidle", gameIdleTick(env).catch(() => {}))
-    ])));
+    // of being noticed weeks later. A failing job reports through the R-05 path and marks the tick
+    // unhealthy for the R-03 dead-man switch.
+    ctx.waitUntil((async () => {
+      let allOk = true;
+      const beat = async (name, p) => {
+        try {
+          await p;
+          await cronBeat(env, name, true);
+        } catch (e) {
+          allOk = false;
+          await onUpdErr(env, e);
+          await cronBeat(env, name, false, e);
+        }
+      };
+      await beat("cron", runCron(env));
+      await Promise.all([
+        beat("stats", flushStatsBuf(env)), beat("nuke", flushNukeBuf(env)), beat("d1", d1Sweep(env)),
+        beat("shadow", shadowSync(env)), beat("delq", delQsweep(env)),
+        beat("nhwatch", nhWatchdog(env).catch(() => {})), beat("dive", diveCronTick(env).catch(() => {})),
+        beat("divegen", divePreGen(env).catch(() => {})), beat("gameidle", gameIdleTick(env).catch(() => {}))
+      ]);
+      await hcPing(env, allOk);
+    })());
   }
 };
 
