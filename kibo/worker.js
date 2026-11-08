@@ -811,6 +811,10 @@ async function handleCallback(env, cb) {
   } else if (act === "nhnz" && chatId) {
     // v2.73.0: tombol "Bikin ZIP" (album & /nhs) — cache dulu, baru dispatch builder
     await handleNhNzip(env, cb.id, chatId, arg);
+  } else if (act === "nh" && chatId) {
+    // R-48: satu hasil search dipilih → jalur build biasa (id + format default)
+    await tg(env, "answerCallbackQuery", { callback_query_id: cb.id, text: "\u{1F4E6}" });
+    await nhRun(env, chatId, arg, "", "");
   } else if (act === "hostp" && chatId) {
     await handleHostCb(env, cb.id, chatId, mid, arg);
   } else if (act === "hostcancel" && chatId) {

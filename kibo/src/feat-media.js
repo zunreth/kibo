@@ -990,10 +990,73 @@ async function nhAlbumDeliver(env, chatId, L, id, title, numPages, pages, ctrlMi
 
 export async function handleNh(env, msg, chatId) {
   const raw = (msg.text || "").replace(/^\/\S+\s*/, "").trim();
+  const L = await uiLang(env);
   const parts = raw.split(/\s+/);
   // R-12: `/nh last [fmt]` re-sends the newest cached build instead of dispatching another one.
   if (/^last$/i.test(parts[0] || "")) return nhLast(env, chatId, parts[1]);
-  return nhRun(env, chatId, parts[0], parts[1], parts[2]);
+  if (!raw) return reply(env, chatId, L.nhUsage);
+  // R-48: digits are an id, a link is a link, everything else is a search. No guessing.
+  if (/^\d{1,10}$/.test(parts[0])) return nhRun(env, chatId, parts[0], parts[1], parts[2]);
+  const link = nhLinkId(raw);
+  if (link) return nhRun(env, chatId, link.id, link.fmt || "", "");
+  if (/^https?:\/\//i.test(raw)) return reply(env, chatId, L.nhUsage);
+  return nhSearch(env, chatId, raw);
+}
+
+// ===== R-48: /nh <query> search =====
+// The official API needs a key (v2 search -> 400, legacy -> 403), so results are read from the
+// mirror's search page. Brittle by nature: any parse failure or non-200 is reported to the user
+// instead of pretending there were no results.
+const NH_SITE = "https://nhentai.to";
+const NH_SITE_UA = "Mozilla/5.0 (compatible; kibo/2.75; +https://github.com/ruqes/kibo)";
+const NH_SEARCH_MAX = 12;
+
+export function nhUnesc(s) {
+  return String(s || "")
+    .replace(/&quot;/g, '"').replace(/&#0?39;/g, "'").replace(/&apos;/g, "'")
+    .replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">")
+    .replace(/&#(\d+);/g, (_, d) => String.fromCharCode(Number(d)));
+}
+
+export function nhParseSearch(html, max) {
+  const out = [];
+  const blocks = String(html || "").split('<div class="gallery"').slice(1);
+  for (const b of blocks) {
+    const id = (b.match(/href="\/g\/(\d{1,10})\//) || [])[1];
+    if (!id) continue;
+    const title = nhUnesc((b.match(/alt="([^"]*)"/) || [])[1] || "").replace(/\s+/g, " ").trim();
+    const thumb = (b.match(/src="(https:\/\/[^"]+)"/) || [])[1] || "";
+    out.push({ id: Number(id), title: title.slice(0, 110), thumb });
+    if (out.length >= (max || NH_SEARCH_MAX)) break;
+  }
+  return out;
+}
+
+export async function nhSearch(env, chatId, query) {
+  const L = await uiLang(env);
+  const q = String(query || "").replace(/\s+/g, " ").trim().slice(0, 80);
+  if (!q) return reply(env, chatId, L.nhUsage);
+  let html = "";
+  try {
+    const r = await fetch(NH_SITE + "/search?q=" + encodeURIComponent(q), {
+      headers: { "user-agent": NH_SITE_UA, accept: "text/html" },
+      signal: AbortSignal.timeout(15000)
+    });
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    html = await r.text();
+  } catch (e) {
+    return reply(env, chatId, L.nhSearchFail(String((e && e.message) || e).slice(0, 90)));
+  }
+  const hits = nhParseSearch(html, NH_SEARCH_MAX);
+  if (!hits.length) return reply(env, chatId, L.nhSearchEmpty(hesc(q)));
+  const lines = [L.nhSearchHead(hesc(q)), ""];
+  const rows = [];
+  hits.forEach((h, i) => {
+    lines.push((i + 1) + ". " + hesc(h.title));
+    rows.push([{ text: (i + 1) + ". " + h.title.slice(0, 44), callback_data: "nh:" + h.id }]);
+  });
+  lines.push("", L.nhSearchHint);
+  return tg(env, "sendMessage", { chat_id: chatId, text: lines.join("\n"), parse_mode: "HTML", reply_markup: { inline_keyboard: rows } });
 }
 
 // v2.71.0: link NH yang ditempel di chat (bukan command) → {id, fmt} atau null.
