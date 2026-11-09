@@ -1747,12 +1747,14 @@ export async function handleYtUpload(env, cbId, chatId, mid, tok) {
   // before telling anyone the pull failed.
   let ok2 = false;
   if (e.y) {
-    if (e.k === "mp3") {
-      const fr = await pbYtEx(env, e.y, "144");
-      if (fr.ok) ok2 = await ytSendAsAudio(env, chatId, L, mid, fr.u, e.t || fr.t || "", fr.dur, "M4A", 45000);
-    } else {
-      const fr = await pbYtEx(env, e.y, e.k || "360");
-      if (fr.ok) ok2 = await ytUploadResolved(env, chatId, L, mid, fr.u, e.k || "360", e.t || fr.t || "", fr.fmt, 45000);
+    // The requested rung may be the one the resolver cannot fetch right now; try the others too.
+    const rungs = e.k === "mp3" ? ["144", "360", "240"] : [e.k || "360", "360", "144"].filter((v, i, a) => a.indexOf(v) === i);
+    for (const rung of rungs) {
+      const fr = await pbYtEx(env, e.y, rung);
+      if (!fr.ok) continue;
+      if (e.k === "mp3") ok2 = await ytSendAsAudio(env, chatId, L, mid, fr.u, e.t || fr.t || "", fr.dur, "M4A", 30000);
+      else ok2 = await ytUploadResolved(env, chatId, L, mid, fr.u, e.k || "360", e.t || fr.t || "", fr.fmt, 30000);
+      if (ok2) break;
     }
   }
   if (ok2) { try { await env.KV.delete(YT_UP_PREFIX + tok); } catch (_) {} return; }
@@ -1828,15 +1830,21 @@ export async function handleYtBuild(env, cbId, chatId, mid, arg) {
     const a = await btchAudio(env, e.u);
     if (a && await ytUploadResolved(env, chatId, L, wmid, a.u, "mp3", a.t || e.t || "", "MP3", 30000)) return;
     // No audio-only source is alive, but the muxed mp4 carries the audio track — send that as audio.
-    const pv = await pbYtEx(env, e.u, "144");
-    if (pv.ok && await ytSendAsAudio(env, chatId, L, wmid, pv.u, pv.t || e.t || "", pv.dur, "M4A", 45000)) return;
+    // Rungs fail independently at the resolver ("pick another format"), so walk a short ladder.
+    let last = null;
+    for (const rung of ["144", "360", "240"]) {
+      const pv = await pbYtEx(env, e.u, rung);
+      if (!pv.ok) continue;
+      last = pv;
+      if (await ytSendAsAudio(env, chatId, L, wmid, pv.u, pv.t || e.t || "", pv.dur, "M4A", 30000)) return;
+    }
     // The bytes refused us (the file endpoints rate limit in bursts). The link still opens in a
     // browser and plays the audio, so hand that over instead of a build card that would need the
     // very same bytes.
-    if (pv.ok) {
+    if (last) {
       const upTok = rndTok();
-      try { await putJSON(env, YT_UP_PREFIX + upTok, { c: chatId, u: pv.u, y: e.u, k: "mp3", t: pv.t || e.t || "", f: "M4A", sz: pv.sz || 0, exp: Date.now() + DL_SAV_TTL_MS }, env.DB ? { ttlMs: DL_SAV_TTL_MS } : undefined); } catch (_) {}
-      if (await ytLinkCard(env, chatId, L, wmid, pv.u, "mp3", pv.t || e.t || "", pv.sz || 0, { fmt: "M4A" }, upTok)) return;
+      try { await putJSON(env, YT_UP_PREFIX + upTok, { c: chatId, u: last.u, y: e.u, k: "mp3", t: last.t || e.t || "", f: "M4A", sz: last.sz || 0, exp: Date.now() + DL_SAV_TTL_MS }, env.DB ? { ttlMs: DL_SAV_TTL_MS } : undefined); } catch (_) {}
+      if (await ytLinkCard(env, chatId, L, wmid, last.u, "mp3", last.t || e.t || "", last.sz || 0, { fmt: "M4A" }, upTok)) return;
     }
   }
   // Resolver is out: ask before spending a GitHub Actions run — never dispatch on our own.
