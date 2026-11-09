@@ -33,7 +33,8 @@ Everything degrades **honestly**: without an optional key the related features a
 | `SEARCH_KEY` | the AI's `web_search` tool (live facts, news, prices, schedules) — accepts a **Tavily** key (`tvly-…`, tavily.com) **or** a **Serper** key (serper.dev) | free keyless fallbacks only (DuckDuckGo / Wikipedia / news feeds) — often flaky from Cloudflare's IPs |
 | `LASTFM_KEY` (+ optional `LASTFM_USER`) | music: now-playing inject + `/np`, `/wrap`, song-games pools, lyric quiz | music features report missing key |
 | `IG_COOKIE` | `/dl` for **restricted/age-gated** Instagram posts | public IG/TikTok/YouTube downloads still work |
-| cron (on by default) | reminders, daily digest, quests, `/dive` auto-gen, memory resurface, `/alarm`, countdown alerts | cron-dependent features idle until you enable it |
+| `SAUCE_KEY` | `/sauce` reverse image search — a free **SauceNAO API key** (saucenao.com, ~100 searches/day) | `/sauce` answers "no key configured" |
+| cron (on by default) | reminders, daily digest, quests, `/dive` auto-gen, memory resurface/`recap`, `/alarm`, countdown alerts | cron-dependent features idle until you enable it |
 
 **About `IG_COOKIE`:** it is *your own* Instagram session cookie and using it is **your choice and your risk**. Bot traffic can flag the account; if Instagram invalidates the session the bot tells you (`/dl` → auth-failed message) and you refresh the cookie. Never ship a cookie that isn't yours. **What to paste:** either the **full `Cookie` request header** (preferred — carries `sessionid` plus the device/csrf fields) or **just the `sessionid` value** (`sessionid=…` or the bare value — the bot wraps it either way). `sessionid` is httpOnly, so it only appears in DevTools → Network → the top `instagram.com` document request → Request Headers → `cookie:` — `document.cookie` in the console will NOT show it. Alternative: right-click that request → Copy → Copy as cURL, and keep the part after `-b`/`--cookie`.
 
@@ -54,7 +55,7 @@ Interactive prompts cover everything; non-interactive uses a JSON file:
   "aiModel": "...",       // required — model id your endpoint serves
   "accountId": "",        // optional — auto-picked when your token sees one account
   "workerName": "kibo", // optional
-  "searchKey": "", "lastfmKey": "", "lastfmUser": "", "igCookie": "",  // optional
+  "searchKey": "", "lastfmKey": "", "lastfmUser": "", "igCookie": "", "sauceKey": "",  // optional
   "cron": true,           // optional — per-minute cron (reminders/digest/dive/…)
   "skipTg": false         // optional — skip Telegram steps (CF-only test)
 }
@@ -62,14 +63,14 @@ Interactive prompts cover everything; non-interactive uses a JSON file:
 
 **Credential reuse:** at the end of an interactive run the installer offers to save everything to `kibo/setup-saved.json` (chmod 600, local only — it is git-ignored and never uploaded). Future runs prefill from it: interactive prompts just need Enter, and `--config` files only need the fields that changed (the saved file fills the rest). Delete the file to forget; `--uninstall` offers to remove it too.
 
-Env knobs the bot reads at runtime (all optional, sane defaults): `DL_SIZE_TIMEOUT_MS`, `RSS_TIMEOUT_MS`, `GEN_WATCHDOG_MAX_MS`, `WD_STALL_MS`, `DIVE_GEN_TIMEOUT_MS`, `REL_GAP_MS`, `SFNOPE_MS`, `PROBE_DEL_MS`.
+Env knobs the bot reads at runtime (all optional, sane defaults — only for tuning): `DL_SIZE_TIMEOUT_MS`, `RSS_TIMEOUT_MS`, `GEN_WATCHDOG_MS`, `GEN_WATCHDOG_MAX_MS`, `WD_STALL_MS`, `DIVE_GEN_TIMEOUT_MS`, `REL_GAP_MS`, `SFNOPE_MS`, `PROBE_DEL_MS`, `DL_DEL_MS`, `DL_MENU_MS`, `DL_PICK_BUDGET_MS`, `DL_RESOLVE_BUDGET_MS`, `DL_RESOLVE_HARD_MS`, `DL_BTCH_GAP_MS`, `HIST_SLIM_GAP_MS`, `NH_AUTODEL_MS`, `NOTIFY_MS`, `REGEN_BTN_MS`, `RR_LOCK_MS`, `SHADOW_HOT_MS`, `SHADOW_INTERVAL_MS`, `STATS_FLUSH_MS`, `NUKE_FLUSH_MS`, `RESP_DEADLINE_MS`, `SC_RESOLVE_BUDGET_MS`, `YT_RESOLVE_BUDGET_MS`, `STAMP_THROTTLE_MS`, `TG_TIMEOUT_MS`, `TG_UPLOAD_TIMEOUT_MS`, `UPSTREAM_TIMEOUT_MS`, `HOST_TIMEOUT_MS`, `SAUCE_TIMEOUT_MS`. Changing one is `wrangler secret put <NAME>` / re-running the installer with the value in `.botenv`-style config — defaults live in `kibo/src/consts.js`.
 
 ## Troubleshooting
 
 - **Bot totally silent** → `curl https://api.telegram.org/bot<TOKEN>/getWebhookInfo` — 409 means another app holds the webhook; re-run the installer.
 - **Installer health-check warning** — the CF deploy itself succeeded; verify with `curl https://<worker>.<subdomain>.workers.dev/` (some networks/Corporate proxies block Node's fetch).
 - **AI replies fail** — check `AI_BASE` includes `/v1` and the model id matches what your provider serves.
-- **Something feels off about a key** → `node setup.mjs --verify` live-checks every saved key (AI endpoint, Last.fm key + user, search key, IG cookie) and tells you exactly what will fail. The installer runs the same checks during setup — "secret ok" only ever meant *stored*, the `0/7` checks are what tell you it's *valid*.
+- **Something feels off about a key** → `node setup.mjs --verify` live-checks every saved key (AI endpoint, Last.fm key + user, search key, SauceNAO key, IG cookie) and tells you exactly what will fail. The installer runs the same checks during setup — "secret ok" only ever meant *stored*, the `0/7` checks are what tell you it's *valid*.
 - **Cron features quiet** — confirm the schedule exists (Dashboard → Workers → your worker → Triggers).
 
 ## Updating

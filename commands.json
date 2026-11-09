@@ -57,12 +57,24 @@
    "description": "regen: drop the last AI reply, answer from scratch (emoji react on a bot msg also triggers)"
   },
   {
+   "command": "regen",
+   "description": "alias of /regenerate"
+  },
+  {
    "command": "continue",
    "description": "resume a reply cut by the runtime limit (⏱) from where it stopped"
   },
   {
+   "command": "cont",
+   "description": "alias of /continue"
+  },
+  {
    "command": "abort",
    "description": "stop the AI process that is still running (thinking too long)"
+  },
+  {
+   "command": "debug",
+   "description": "owner-only debug ring log (on/off/clear)"
   },
   {
    "command": "remember",
@@ -77,12 +89,24 @@
    "description": "delete a memory by id"
   },
   {
+   "command": "export",
+   "description": "export this conversation as md/json file"
+  },
+  {
+   "command": "undo",
+   "description": "drop the last exchange from AI context"
+  },
+  {
    "command": "cmems",
    "description": "active char memory (list/add/del)"
   },
   {
    "command": "j",
    "description": "write a journal entry"
+  },
+  {
+   "command": "journal",
+   "description": "alias of /j (write a journal entry)"
   },
   {
    "command": "digest",
@@ -153,6 +177,18 @@
    "description": "vault files (fetch/rename/delete)"
   },
   {
+   "command": "find",
+   "description": "search vault files by name"
+  },
+  {
+   "command": "get",
+   "description": "fetch a vault file by name/id"
+  },
+  {
+   "command": "rm",
+   "description": "delete a vault file by name/id"
+  },
+  {
    "command": "quest",
    "description": "daily quest + streak & points"
   },
@@ -210,15 +246,15 @@
   },
   {
    "command": "yts",
-   "description": "search YouTube: numbered results → download menu"
+   "description": "search YouTube: numbered results + metadata, tap a number = download menu"
   },
   {
    "command": "nh",
-   "description": "nhentai gallery → photo album (foto tiap halaman, auto-hapus; /nh <id> zip|pdf|scroll untuk file)"
+   "description": "nhentai gallery → photo album (auto-delete; /nh <id> zip|pdf|scroll for the file)"
   },
   {
    "command": "nhs",
-   "description": "list & open gallery nhentai yang disimpan (dari tombol 💾 album)"
+   "description": "list & open saved nhentai galleries (from the 💎 album button)"
   },
   {
    "command": "host",

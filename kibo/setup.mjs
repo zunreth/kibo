@@ -63,13 +63,13 @@ function printHelp() {
   node setup.mjs                    interactive prompts (offers to save credentials at the end;
                                     next runs prefill from setup-saved.json automatically)
   node setup.mjs --config f.json    non-interactive (fields: cfToken, tgToken, aiBase, aiKey, aiModel,
-                                    accountId?, workerName?, searchKey?, lastfmKey?, lastfmUser?,
+                                    accountId?, workerName?, searchKey?, lastfmKey?, lastfmUser?, sauceKey?,
                                     cron?, skipTg?)
   node setup.mjs --dry-run          print the plan, touch nothing
   node setup.mjs --update           pull the latest code from the repo and redeploy with the
                                     saved credentials (setup-saved.json; or --update --config f.json);
                                     skips when already up to date — add --force to redeploy anyway
-  node setup.mjs --verify           live-check the saved keys (AI endpoint, Last.fm, search, IG cookie)
+  node setup.mjs --verify           live-check the saved keys (AI endpoint, Last.fm, search, SauceNAO, IG cookie)
   node setup.mjs --uninstall        remove the worker + its KV + its D1 (asks for confirmation;
                                     or --uninstall --config f.json with cfToken, workerName, confirm)
   node setup.mjs --help             this help
@@ -136,7 +136,7 @@ async function loadConfig() {
     for (const req of ["cfToken", "tgToken", "aiBase", "aiKey", "aiModel"])
       if (!c[req]) die(`config missing "${req}" (and no saved setup-saved.json to fall back on)`);
     c.dry = dry; c.cron ??= true; c.skipTg ??= false;
-    c.accountId ??= ""; c.workerName ??= "kibo"; c.igCookie ??= "";
+    c.accountId ??= ""; c.workerName ??= "kibo"; c.igCookie ??= ""; c.sauceKey ??= "";
     return c;
   }
   if (!process.stdin.isTTY) die("stdin is not interactive — use --config f.json or --help");
@@ -156,6 +156,7 @@ async function loadConfig() {
     lastfmKey: await ask("LASTFM_KEY (optional, empty = skip music features):", (saved && saved.lastfmKey) || ""),
     lastfmUser: await ask("LASTFM_USER (optional, default last.fm username):", (saved && saved.lastfmUser) || ""),
     igCookie: await ask("IG_COOKIE (optional — Instagram login cookie so /dl can fetch restricted/age-gated posts. Paste EITHER the full 'Cookie' request header of the instagram.com page request (preferred) OR just your sessionid value.\n  How: desktop browser logged in → F12 DevTools → Network tab → reload instagram.com → click the top request (document) → Request Headers → copy the whole 'cookie:' value — sessionid is httpOnly, it only shows there, document.cookie won't. Your account = your risk; empty = skip):", (saved && saved.igCookie) || ""),
+    sauceKey: await ask("SAUCE_KEY (optional — a free SauceNAO API key (saucenao.com, ~100 searches/day) so /sauce can reverse-search image sources; empty = /sauce answers 'not configured'):", (saved && saved.sauceKey) || ""),
     cron: true,
   };
   if (!c.cfToken || !c.tgToken || !c.aiBase || !c.aiKey || !c.aiModel) die("a required field is empty");
@@ -291,6 +292,14 @@ async function verifyKeys(cfg, interactive) {
     else if (r.status === 429) warn("Instagram rate-limited the check (429) — cookie NOT verified either way; re-run --verify later");
     else warn("IG_COOKIE can't be confirmed (HTTP " + r.status + ")");
   } catch { warn("Instagram unreachable — can't verify IG_COOKIE"); }
+  if (cfg.sauceKey) try {
+    const r = await fetch("https://saucenao.com/search.php?output_type=2&numres=1&db=999&api_key=" + encodeURIComponent(cfg.sauceKey) + "&testmode=1&url=" + encodeURIComponent("https://i.imgur.com/Ad86rhT.jpg"), { signal: AbortSignal.timeout(15000) });
+    const j = await r.json().catch(() => null);
+    const st = j && j.header && j.header.status;
+    if (st > 0) ok("SAUCE_KEY verified (SauceNAO account type " + (j.header.account_type) + ", " + (j.header.long_limit) + "/day)");
+    else if (st !== undefined && st < 0) warn("SAUCE_KEY REJECTED by SauceNAO (status " + st + ": " + (j.header.message || "") + ") — /sauce will answer 'not configured key'");
+    else warn("SauceNAO check inconclusive (HTTP " + r.status + ") — /sauce may still work");
+  } catch { warn("SauceNAO unreachable — can't verify SAUCE_KEY"); }
   return cfg;
 }
 async function updateFlow(cfgIn, force) {
@@ -435,6 +444,7 @@ async function main() {
   await setSecret(cfg, acc, cfg.workerName, "LASTFM_KEY", cfg.lastfmKey);
   await setSecret(cfg, acc, cfg.workerName, "LASTFM_USER", cfg.lastfmUser);
   await setSecret(cfg, acc, cfg.workerName, "IG_COOKIE", cfg.igCookie);
+  await setSecret(cfg, acc, cfg.workerName, "SAUCE_KEY", cfg.sauceKey);
 
   step("6/7 Telegram webhook + commands");
   let me = null;
