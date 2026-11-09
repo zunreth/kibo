@@ -494,6 +494,21 @@ export async function handleAbort(env, chatId) {
   return notify(env, chatId, L.abSent);
 }
 
+// ---- R-50: /undo — drop the last exchange from context (cheap comfort feature) ----------------
+// Drops [user, assistant] (or just the tail message) from CHAT_HIST_KEY. Does NOT delete the
+// Telegram messages (that is /delete's job with its nuke tracker); this only rewinds what the
+// model sees, so the next reply is written as if the last exchange never happened.
+export async function handleUndo(env, chatId) {
+  const L = await uiLang(env);
+  const hist = await getJSON(env, CHAT_HIST_KEY, []);
+  if (!hist.length) { await notify(env, chatId, L.undoEmpty); return; }
+  let drop = 1;
+  const last = hist[hist.length - 1];
+  if (last && last.role === "assistant" && hist.length >= 2 && hist[hist.length - 2].role === "user") drop = 2;
+  await putJSON(env, CHAT_HIST_KEY, hist.slice(0, hist.length - drop));
+  await notify(env, chatId, L.undoDone(drop));
+}
+
 export async function handleRegen(env, chatId, showBtn) {
   const now = Math.floor(Date.now() / 1000);
   const lock = await getJSON(env, REGEN_LOCK_KEY, null);

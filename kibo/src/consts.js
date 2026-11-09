@@ -27,6 +27,11 @@ export const REL_PREFIX = "char_rel_";
 export const REL_GAP_MS = 30 * 60 * 1000;
 export const SYS_REL = "You track the evolving relationship between the user and their roleplay character. Given the current relationship state and recent dialogue, output ONLY a JSON object: {\"d\": <integer, change in closeness from -10 to 10>, \"mood\": \"<current mood of the character, 1-2 words>\", \"note\": \"<one short sentence describing the current dynamic>\"}. No other text, no markdown.";
 export const MEM_KEY = "memories";
+// R-16 Memory v2: one small extraction AI call per day. The per-day marker is written only AFTER
+// the facts are saved, so a failed/partial day is retried on the next tick and a finished day never
+// runs twice. R-18 /export and R-50 /undo add no new keys (they read the existing history).
+export const MEM_EXTRACT_KEY = "mem_x_done:"; // + WIB day string
+export const MEM_EXTRACT_MAX = 3; // max new facts saved per run
 export const MEM_MAX = 50;
 export const OWNER_FALLBACK = "";
 export const CHAR_KEY = "chars";
@@ -280,8 +285,9 @@ export const CHAIN_STEP_PTS = 5;
 export const CHAIN_BONUS = 50;
 export const CHAIN_SHIELD = 1; // v2.68.14: hadiah tamat arc = +1 shield (bukan hangus/deadline; benefit permanen jaga streak)
 export const CHAIN_GEN_STALE_MS = 180000;
+export const SYS_MEM_EXTRACT = "You extract durable personal facts from a conversation log between the user and their assistant kibo. Find at most 3 NEW facts worth remembering long-term: stable things about the user (preferences, skills, home, work, ongoing projects, relationships, pets, health, schedule). NOT one-off moods, NOT questions, NOT small talk, NOT anything already listed under KNOWN FACTS (already saved - if everything new is already covered, output DONE). Output format: one fact per line, plain text, no bullets, no numbering, no commentary, no thinking out loud. Max 30 words per fact, written from the assistant's perspective (about the user). If nothing qualifies, output exactly DONE.";
 export const SYS_CHAIN = "You generate a tiny 5-day quest arc for the user's Telegram bot companion. Reply with EXACTLY one line, pipe-separated, NO extra text, no markdown, no quotes: ArcName | step1 | step2 | step3 | step4 | step5. ArcName = a catchy title (max 6 words) for a fun, imaginative mini-adventure rooted in everyday life — habits, fitness, productivity, learning, a cozy hobby, or a small personal project. Frame it like a light RPG challenge so it feels exciting, but keep it believable: the 5 steps are a connected journey (day 1 an easy warm-up, days 2-4 climbing the arc, day 5 a satisfying finish). Each step = a short vivid label (max 8 words) the user can picture themselves doing. Make it fun, punchy, and a little playful — but NOT absurd, cartoonish, or slapstick (no talking animals, no stealing, no magical hijinks). Each step builds on the previous.";
-export const BOT_VER = "2.78.2";
+export const BOT_VER = "2.79.0";
 
 // edit-fitur v2.63.0
 export const EDIT_MARKER = "//";

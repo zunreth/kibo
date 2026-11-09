@@ -20,6 +20,10 @@ import {
   NUKE_CAP,
   CHAT_HIST_MAX,
   MEM_KEY,
+  MEM_EXTRACT_KEY,
+  MEM_EXTRACT_MAX,
+  SYS_MEM_EXTRACT,
+  HIST_SUM_KEY,
   MEM_MAX,
   OWNER_FALLBACK,
   CHAR_KEY,
@@ -185,6 +189,8 @@ import {
 } from './feat-rss.js';
 import {
   sseObj,
+  chatStream,
+  saveMemory,
 } from './feat-personal.js';
 import {
   getActiveCard,
@@ -356,6 +362,106 @@ export async function handleJournal(env, msg, chatId) {
   while (arr.length > 1000) arr.shift();
   await putJSON(env, "journal", arr);
   await notify(env, chatId, L.jSaved(fmtWIB(Math.floor(Date.now() / 1000), L)) + (moods.length ? L.jMood + moods.map(t => "#" + t).join(" ") : ""));
+}
+
+// ---- R-16: automatic daily fact extraction (one AI call per day) ------------------------------
+// Cheap contract: one chatStream request, max 300 tokens, no tools. The per-day marker is a JSON
+// array; "ok" is pushed only AFTER the facts are saved (a throw or a failed fetch leaves no marker,
+// so the next cron tick retries). Near-duplicate suppression is a local case-insensitive check
+// against both the full memory list and today's marker - the model gets KNOWN FACTS as a hint, but
+// the local check is what actually guarantees no spam.
+function memNorm(s) {
+  return String(s || '').toLowerCase().replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+}
+function memDupe(fact, texts) {
+  const f = memNorm(fact);
+  if (!f) return true;
+  const words = f.split(' ').filter(w => w.length > 3);
+  for (const t of texts) {
+    const n = memNorm(t);
+    if (!n) continue;
+    if (n === f) return true;
+    if (words.length > 2) {
+      // Jaccard over the longer side's significant words: order/typos survive, a genuinely new
+      // fact shares at most a couple of words. The ceil(0.8) containment was blind to word-order
+      // swaps and to "n has the words but as substrings of other words".
+      const nw = n.split(' ').filter(x => x.length > 3);
+      const A = new Set(words), B = new Set(nw);
+      let inter = 0;
+      for (const w of A) if (B.has(w)) inter++;
+      const union = new Set([...A, ...B]).size;
+      if (union && inter / union >= 0.5) return true;
+    }
+  }
+  return false;
+}
+
+export async function memExtractTry(env) {
+  const day = questDay(Math.floor(Date.now() / 1000));
+  const mk = MEM_EXTRACT_KEY + day;
+  const done = await getJSON(env, mk, []);
+  if (done.includes("ok")) return "done";
+  const hist = (await getJSON(env, CHAT_HIST_KEY, [])).filter(m => m && m.content);
+  if (hist.length < 6) return "skip";
+  const cfg = await aiConf(env);
+  if (!cfg.base || !cfg.key || !cfg.model) return "skip";
+  const mems = await getJSON(env, MEM_KEY, []);
+  const known = mems.slice(-50).map(m => "- #" + m.id + " | " + m.text).join("\n");
+  const convo = hist.slice(-24).map(m => (m.role === "user" ? "User: " : "kibo: ") + String(m.content).slice(0, 400)).join("\n").slice(0, 9000);
+  const msgs = [
+    { role: "system", content: SYS_MEM_EXTRACT + (known ? "\n\nKNOWN FACTS (already saved):\n" + known : "") },
+    { role: "user", content: "Recent dialogue:\n" + convo + "\n\nExtract the new durable facts (max 3, one per line), or DONE if none." }
+  ];
+  let out = "";
+  try { for await (const d of chatStream(env, msgs, 300)) out += d; }
+  catch (_) { return "fail"; }
+  const clean = stripThink(String(out || "")).trim();
+  if (!clean || clean.toUpperCase().startsWith("DONE")) {
+    await putJSON(env, mk, done.concat("ok"));
+    return "empty";
+  }
+  const facts = clean.split("\n").map(s => s.replace(/^[-*\d.)\s]+/, "").trim()).filter(s => s && s.length > 3 && s.length <= 220).slice(0, MEM_EXTRACT_MAX);
+  const before = mems.length;
+  for (const f of facts) {
+    if (memDupe(f, mems.map(x => x.text))) continue;
+    globalThis.__memAuto = true; // read by saveMemory → provenance src:"auto"
+    let id = 0;
+    try { id = await saveMemory(env, f); } finally { globalThis.__memAuto = false; }
+    if (id) mems.push({ id: id, text: f });
+  }
+  const added = mems.length - before;
+  await putJSON(env, mk, done.concat("ok"));
+  return added ? "new:" + added : "empty";
+}
+
+// ---- R-35: weekly recap (one AI call, Sunday 21:35 WIB) ---------------------------------------
+export async function memRecapCron(env) {
+  const now = new Date(Date.now() + WIB * 1000);
+  if (now.getUTCDay() !== 0 || now.getUTCHours() !== 21 || now.getUTCMinutes() < 30 || now.getUTCMinutes() >= 40) return;
+  const dayNow = questDay(Math.floor(Date.now() / 1000));
+  const week = questDay(Math.floor(Date.now() / 1000) - 7 * 86400);
+  const card = await getActiveCard(env);
+  if (card) return; // roleplay characters have their own wrap; the recap covers the personal side
+  const rk = "mem_recap_" + week;
+  if (await env.KV.get(rk)) return;
+  const mems = await getJSON(env, MEM_KEY, []);
+  if (mems.length < 3) { await env.KV.put(rk, "1"); return; }
+  const cfg = await aiConf(env);
+  if (!cfg.base || !cfg.key || !cfg.model) return;
+  await env.KV.put(rk, "1");
+  const lines = mems.slice(-50).map(m => "- #" + m.id + " | " + m.text).join("\n");
+  const hist = (await getJSON(env, CHAT_HIST_KEY, [])).filter(m => m && m.content).slice(-24);
+  const convo = hist.map(m => (m.role === "user" ? "User: " : "kibo: ") + String(m.content).slice(0, 300)).join("\n").slice(0, 6000);
+  const msgs = [
+    { role: "system", content: "You write a short weekly recap for the user from their assistant kibo's perspective. Use ONLY the memories and dialogue given - never invent events. 3-6 short lines (one line each, no markdown headers): promises made, plans in progress, open threads worth closing, memorable moments. End with one forward-looking line. Casual tone, no preamble, no thinking out loud." },
+    { role: "user", content: "Stored memories:\n" + lines + "\n\nRecent dialogue:\n" + convo + "\n\nWrite this week's recap." }
+  ];
+  let out = "";
+  try { for await (const d of chatStream(env, msgs, 400)) out += d; }
+  catch (_) { await env.KV.delete(rk); return; }
+  const clean = stripThink(out).trim();
+  const chatId = parseInt((await env.KV.get("owner_chat")) || "0", 10);
+  if (clean && chatId) await reply(env, chatId, "\u{1F4CD} <b>Weekly recap</b>\n" + mdTg(esc(clean.slice(0, 1800))));
 }
 
 export async function sendDigest(env, chatId, fromCron) {
@@ -847,6 +953,8 @@ export async function runCron(env) {
   const wib = new Date((nowSec + WIB) * 1000);
   const qDay = questDay(nowSec);
   if (wib.getUTCHours() === 7 && wib.getUTCMinutes() < 5 && (await getJSON(env, "digest_day", "")) !== qDay) { await putJSON(env, "digest_day", qDay); await sendDigest(env, null, true); }
+  try { await memExtractTry(env); } catch (_) {}
+  try { await memRecapCron(env); } catch (_) {}
   const pingSlot = questPingSlot(qDay);
   const wibMin = wib.getUTCHours() * 60 + wib.getUTCMinutes();
   if (wibMin >= pingSlot && wibMin < pingSlot + 5) await fireQuest(env, nowSec);

@@ -93,6 +93,8 @@ import {
   nhPdfQ,
   NH_PDFQS,
   NH_HOSTS,
+  tgUpTmo,
+  tgErrLog,
 } from './base.js';
 import { d1Stats, shadowInfo } from './store-d1.js';
 import {
@@ -458,11 +460,20 @@ export async function handleTts(env, msg, chatId) {
   if (next) await reply(env, chatId, L.ttsOnNote);
 }
 
+// R-16: age chip. Entries written before v2.79.0 have no src/ts fields - they render as
+// "manual" with no age rather than pretending to a provenance they never had.
+function memAge(ms, L) {
+  if (!ms) return "";
+  const d = Math.floor((Date.now() - ms) / 86400000);
+  return d <= 0 ? L.memAgeToday : d === 1 ? L.memAge1d : L.memAgeNd(d);
+}
+
 export function renderMemories(list, L) {
+  L = L || UI.en;
   L = L || UI.en;
   if (!list.length) return { text: L.memEmpty, markup: { inline_keyboard: [[{ text: L.home, callback_data: "menu" }]] } };
   return {
-    text: L.memTitle + (list.length ? UI_SEP + list.map(x => "#" + x.id + " \u2014 " + esc(x.text)).join("\n") : ""),
+    text: L.memTitle + (list.length ? UI_SEP + list.map(x => "#" + x.id + " \u2014 " + esc(x.text) + " <i>" + ((x.src === "auto" ? L.memSrcAuto : L.memSrcMan) + (x.ts ? " \u00b7 " + memAge(x.ts, L) : "")) + "</i>").join("\n") : ""),
     markup: { inline_keyboard: list.map(x => [{ text: "\u{1F5D1} #" + x.id, callback_data: "mdel:" + x.id }]).concat([[{ text: L.home, callback_data: "menu" }]]) }
   };
 }
@@ -508,7 +519,7 @@ export async function saveMemory(env, raw, key) {
   if (!text) return 0;
   const list = await getJSON(env, key, []);
   const id = list.reduce((m, x) => Math.max(m, x.id || 0), 0) + 1;
-  list.push({ id: id, ts: Date.now(), text: text });
+  list.push({ id: id, ts: Date.now(), text: text, src: (globalThis.__memAuto ? "auto" : undefined) });
   while (list.length > MEM_MAX) list.shift();
   await putJSON(env, key, list);
   return id;
@@ -566,6 +577,47 @@ export async function renderOtpView(env) {
 export async function handleOtp(env, chatId) {
   const v = await renderOtpView(env);
   await tg(env, "sendMessage", { chat_id: chatId, text: v.text, parse_mode: "HTML", reply_markup: v.markup });
+}
+
+// ---- R-18: /export — dump the current conversation as .md or .json -------------------------
+// The visible window is small by design (CHAT_HIST_MAX), so the export also carries the running
+// condensed summary (HIST_SUM_KEY) when present - that is the only honest "full" copy we can give.
+// Exports the personal conversation; roleplay chapters live in their own saves/wrap.
+export async function handleExport(env, msg, chatId) {
+  const L = await uiLang(env);
+  const body = (msg.text || "").replace(/^\/\S+\s*/, "").trim().toLowerCase();
+  const fmt = body === "json" ? "json" : body === "md" ? "md" : "";
+  if (!fmt) { await reply(env, chatId, L.expUsage); return; }
+  const hist = (await getJSON(env, CHAT_HIST_KEY, [])).filter(m => m && m.content);
+  if (!hist.length) { await reply(env, chatId, L.expNone); return; }
+  const sum = await getJSON(env, HIST_SUM_KEY, null);
+  const persona = await getJSON(env, PERSONA_KEY, null);
+  const name = persona && persona.name ? persona.name : "user";
+  let payload, fname, ctype;
+  const stamp = new Date().toISOString().slice(0, 10);
+  if (fmt === "json") {
+    payload = JSON.stringify({ kibo: "chat-export", v: 1, ts: Date.now(), persona: persona || null, summary: sum && sum.text ? sum.text : "", messages: hist }, null, 2);
+    fname = "kibo-chat-" + stamp + ".json";
+    ctype = "application/json";
+  } else {
+    const lines = ["# kibo chat — " + stamp, ""];
+    if (sum && sum.text) lines.push("> (condensed earlier context)", ...sum.text.split("\n").map(s => "> " + s), "");
+    for (const m of hist) lines.push("**" + (m.role === "user" ? name : "kibo") + ":** " + String(m.content).replace(/\n/g, "\n\n"), "");
+    payload = lines.join("\n");
+    fname = "kibo-chat-" + stamp + ".md";
+    ctype = "text/markdown";
+  }
+  const form = new FormData();
+  form.append("chat_id", String(chatId));
+  form.append("document", new Blob([payload], { type: ctype }), fname);
+  try {
+    const r = await fetch("https://api.telegram.org/bot" + env.TG_TOKEN + "/sendDocument", { method: "POST", body: form, signal: tgUpTmo(env) });
+    const j = await r.json().catch(() => null);
+    if (!j || !j.ok) {
+      tgErrLog(env, "sendDocument", j);
+      await reply(env, chatId, (await uiLang(env)).vaultBackupFail);
+    }
+  } catch (_) { await reply(env, chatId, (await uiLang(env)).vaultBackupFail); }
 }
 
 export async function handleMe(env, msg, chatId) {

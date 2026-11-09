@@ -234,6 +234,7 @@ import {
   saveMemory,
   deleteMemory,
   handleRemember,
+  handleExport,
   maskCode,
   renderOtpView,
   handleOtp,
@@ -330,6 +331,7 @@ import {
   maybeAutoCont,
   handleAbort,
   handleRegen,
+  handleUndo,
   scheduleRegenBtnDrop,
   handleContinue,
   handleDelete,
@@ -470,6 +472,8 @@ async function handleUpdate(update, env) {
   if (cmd === "/tts") return handleTts(env, msg, chatId);
   if (cmd === "/totp") return handleTotp(env, msg, chatId);
   if (cmd === "/remember") return handleRemember(env, msg, chatId);
+  if (cmd === "/export") { await delCmd(env, chatId, msg.message_id); return handleExport(env, msg, chatId); }
+  if (cmd === "/undo") { await delCmd(env, chatId, msg.message_id); return handleUndo(env, chatId); }
   if (cmd === "/mems") return listMemories(env, chatId);
   if (cmd === "/forget") return delMemory(env, msg, chatId);
   if (cmd === "/cmems") return handleCmems(env, msg, chatId);
