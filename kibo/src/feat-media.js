@@ -535,11 +535,16 @@ async function dlResolve(env, url, plat) {
 // Kalau resolve nyerempet cap → balik { hardTimeout:1 } → caller tampil dlTimeout jujur, bukan diem di "working…".
 // .catch side guard bikin late-reject dari resolve yang udah kepotong gak jadi unhandled rejection.
 const dlHardMs = env => parseInt((env && env.DL_RESOLVE_HARD_MS) || "", 10) || 30000;
-async function dlResolveHard(env, url, plat) {
+// v2.78.2: the hard cap takes what is left of the chain budget instead of a flat 30 s — a
+// resolver that eats the whole budget resolves to a hardTimeout, and the caller answers honestly
+// instead of starting a send phase it can no longer finish. No artificial floor: tests drive this
+// with sub-second caps, and an exhausted budget must resolve to a hardTimeout immediately.
+async function dlResolveHard(env, url, plat, budget) {
+  const cap = budget ? budget.slice(dlHardMs(env)) : dlHardMs(env);
   try {
     return await Promise.race([
       dlResolve(env, url, plat).catch(() => ({ hardErr: 1 })),
-      new Promise(r => setTimeout(() => r({ hardTimeout: 1 }), dlHardMs(env)))
+      new Promise(r => setTimeout(() => r({ hardTimeout: 1 }), cap))
     ]);
   } catch (_) { return null; }
 }
@@ -547,6 +552,14 @@ async function dlResolveHard(env, url, plat) {
 const dlUrlOk = u => typeof u === "string" && /^https:\/\/\S+$/.test(u);
 export const dlRows = (L, items, perRow = 4) => {
   const flat = items.filter(it => dlUrlOk(it.url)).map((it, i) => ({ text: it.kind === "video" ? L.dlBtnVideo(it.fmt || "") : it.kind === "audio" ? L.dlBtnAudio : L.dlBtnPhoto(i + 1), url: it.url }));
+  const rows = [];
+  for (let i = 0; i < flat.length; i += perRow) rows.push(flat.slice(i, i + perRow));
+  return rows;
+};
+// v2.78.2: plain Direct Link rows for the budget-exhausted exit — every item becomes a link
+// button, so a slow resolver still ends with useful buttons instead of a dead placeholder.
+const dlLinkRows = (L, items, perRow = 3) => {
+  const flat = items.filter(it => dlUrlOk(it.url)).map((it, i) => ({ text: (it.kind === "video" ? "🎥" : it.kind === "audio" ? "\uD83C\uDFB5" : "\uD83D\uDDBC foto " + (i + 1)) + " · " + (it.kind === "photo" ? L.dlBtnPhoto(i + 1).replace(/^.*?\s/, "") : (it.fmt || (it.kind === "audio" ? "audio" : "video"))), url: it.url }));
   const rows = [];
   for (let i = 0; i < flat.length; i += perRow) rows.push(flat.slice(i, i + perRow));
   return rows;
@@ -562,9 +575,11 @@ async function dlProbe(env, url) {
     return { st: r.status, ct: (r.headers.get("content-type") || "").split(";")[0].trim().toLowerCase(), sz: cr ? +(cr.split("/")[1] || 0) : +(r.headers.get("content-length") || 0) };
   } catch (_) { return { st: 0, ct: "", sz: 0 }; }
 }
-async function dlSize(env, url) {
+async function dlSize(env, url, budget) {
   try {
-    const r = await fetch(url, { headers: { Range: "bytes=0-0" }, signal: AbortSignal.timeout(dlSizeMs(env)) });
+    const ms = budget ? Math.max(1000, budget.slice(5000)) : dlSizeMs(env);
+    if (ms <= 0) return 0;
+    const r = await fetch(url, { headers: { Range: "bytes=0-0" }, signal: AbortSignal.timeout(Math.min(dlSizeMs(env), ms)) });
     if (!r.ok) return 0;
     const cr = r.headers.get("content-range");
     return cr ? +(cr.split("/")[1] || 0) : +(r.headers.get("content-length") || 0);
@@ -594,13 +609,16 @@ async function audioUpload(env, chatId, url, title, fcap, tok) {
     return j;
   } catch (_) { return null; }
 }
-async function dlSendFiles(env, chatId, items, title, L, src) {
+async function dlSendFiles(env, chatId, items, title, L, src, budget) {
   const rest = [];
   const photos = [];
   let count = 0;
   for (const it of items) {
+    // v2.78.2: the send loop shares the chain budget — a carousel must not start an upload it
+    // cannot finish. Anything not yet sent lands in `rest` (= links in the menu) instead.
+    if (budget && budget.left() < 6000) { rest.push(it); continue; }
     const capUrl = it.kind === "photo" ? DL_SEND_PHOTO_MAX : it.nip ? DL_SEND_MAX : DL_URL_SEND_MAX; // v2.76.0: nip hosts are gated by our upload cap, not by the Telegram by-URL limit
-    const sz = await dlSize(env, it.url);
+    const sz = await dlSize(env, it.url, budget);
     // sz=0 = ukuran gak ketahuan (CDN downloader modern: savenow.to = chunked, no content-length, Range diabaikan) — video/audio TETEP dicoba (TG yang nentuin via limit by-URL, fallback bytes dlFetchCap bail di DL_SEND_MAX); foto tetep butuh size (jalur lama by-URL 5MB)
     if (sz > capUrl) { rest.push(it); continue; }
     if (it.kind === "photo") { if (!sz) rest.push(it); else photos.push(it); continue; }
@@ -745,10 +763,14 @@ export function dlMenuText(L, plat, meta, photosDone, vaItems, urlOnly, note) {
   if (note) lines.push(note);
   return lines.join("\n");
 }
-async function dlMenuShow(env, chatId, L, phMid, plat, vaItems, meta, photosDone, linkRows, src, note) {
+async function dlMenuShow(env, chatId, L, phMid, plat, vaItems, meta, photosDone, linkRows, src, note, budget, linksFallback) {
   const multi = vaItems.length > 1;
   const rows = [];
-  const pr = await Promise.all(vaItems.map(it => dlProbe(env, it.url))); // 1x probe (ct+size) per varian — label audio + gate Direct Link
+  // v2.78.2: the probe row costs one fetch per variant; on a nearly-empty budget skip it and let
+  // the fallback rows carry the links instead of dying mid-menu.
+  const pr = budget && budget.left() < 12000
+    ? vaItems.map(() => ({ st: 200, ct: "", sz: 0 }))
+    : await Promise.all(vaItems.map(it => dlProbe(env, it.url))); // 1x probe (ct+size) per varian — label audio + gate Direct Link
   for (let i = 0; i < vaItems.length; i++) {
     const it = vaItems[i];
     let lbl = it.fmt || "";
@@ -767,7 +789,12 @@ async function dlMenuShow(env, chatId, L, phMid, plat, vaItems, meta, photosDone
     rows.push([{ text: it.kind === "video" ? (it.pos ? "🎥 " + it.pos + "/" + it.total : "🎥 " + (it.fmt || L.dlVideoBtn)) : "🎵 " + lbl, callback_data: "dlpick:" + tok }]);
   }
   for (const r of linkRows || []) rows.push(r);
+  // v2.78.2: every variant became a URL button (big / gated) — same honest exit, and on an empty
+  // budget force the link buttons so the menu is still usable.
   const urlOnly = rows.length > 0 && !rows.some(rw => (rw || []).some(b => b.callback_data)); // semua tombol = URL button (gak ada varian file)
+  if (budget && budget.left() < 8000 && linksFallback && linksFallback.length) {
+    for (const it of vaItems) { if (dlUrlOk(it.url) && !rows.some(rw => (rw || []).some(b => b.url === it.url))) rows.unshift([{ text: it.kind === "video" ? "🎥 " + (it.fmt || "video") : it.kind === "audio" ? "\uD83C\uDFB5 audio" : "foto", url: it.url }]); }
+  }
   const text = dlMenuText(L, plat, meta, photosDone, vaItems, urlOnly, note);
   let mid = phMid;
   if (mid) await tg(env, "editMessageText", { chat_id: chatId, message_id: mid, text, parse_mode: "HTML", reply_markup: { inline_keyboard: rows } });
@@ -783,7 +810,7 @@ export async function handleDlPick(env, cbId, chatId, mid, tok) {
   const multi = !!(e && e.multi);
   if (!multi) { try { await env.KV.delete(DL_PICK_PREFIX + tok); } catch (_) {} }
   if (!e || !e.item) { await tg(env, "answerCallbackQuery", { callback_query_id: cbId, text: L.dlExpired }); return; }
-  const sent = await dlSendFiles(env, chatId, [e.item], e.t || "", L, e.s || "");
+  const sent = await dlSendFiles(env, chatId, [e.item], e.t || "", L, e.s || "", wallBudget(parseInt((env && env.DL_PICK_BUDGET_MS) || "", 10) || 55000)); // v2.78.2: the tap path gets a budget too — out of budget = honest link-only menu, not a dead end
   if (multi) {
     if (!sent.count) {
       const rows = dlRows(L, [e.item]);
@@ -831,8 +858,21 @@ export async function handleDl(env, msg, chatId) {
   // v2.76.0: YouTube never goes through the generic resolver path — it has its own menu
   // (360p instant + 720p/MP3 builder). Doing it here keeps the failure text honest.
   if (plat === "youtube") return ytMenuShow(env, chatId, L, phMid, url, {});
+  // v2.78.2: same treatment the YouTube chain got in 2.78.1. The resolve hard-cap covers a dead
+  // resolver, but a *slow* resolver that succeeds at 28–30 s left nothing for the send phase (photos
+  // one by one, then the menu edit) — the isolate died mid-way and the "working…" placeholder stayed
+  // forever, and there was no watchdog record for this path at all. One budget for the whole chain,
+  // hops get b.slice(), and a record the cron watchdog closes if the invocation dies anyway.
+  const recKey = YT_RESOLVE_PREFIX + rndTok();
+  const budget = wallBudget(parseInt((env && env.DL_RESOLVE_BUDGET_MS) || "", 10) || 60000);
+  if (phMid) { try { await putJSON(env, recKey, { chat: chatId, mid: phMid, kind: "resolve", vid: "dl", ts: Date.now() }, env.DB ? { ttlMs: 10 * 60 * 1000 } : undefined); } catch (_) {} }
+  const linksOf = items => items.map(it => it && it.url).filter(u => dlUrlOk(u)).slice(0, DL_MAX_LINKS);
+  try {
   let res = null;
-  try { res = await dlResolveHard(env, url, plat); } catch (_) {}
+  // The resolve hard-cap now shares the chain budget: a resolver that eats the whole budget resolves
+  // to a hardTimeout, which the failure branch reports honestly (dlTimeout) instead of leaving the
+  // send phase nothing to work with.
+  try { res = await dlResolveHard(env, url, plat, budget); } catch (_) {}
   const items = res && res.items ? res.items.slice(0, DL_MAX_LINKS) : [];
   if (!items.length) {
     const failText = (res && res.hardTimeout) || plat === "youtube" ? L.dlTimeout : (res && res.authdead ? L.dlIgAuth() : res && res.blocked ? L.dlIgBlocked() : L.dlFailRes(plat));
@@ -842,13 +882,24 @@ export async function handleDl(env, msg, chatId) {
     } else await reply(env, chatId, failText);
     return;
   }
+  // Out of budget after a slow resolve: post the links right away (Telegram opens them in a browser)
+  // instead of dying mid-photo-send with the placeholder still up.
+  if (budget.left() < 10000) {
+    const links = linksOf(items);
+    const t = (links.length ? L.dlSlowLinks(links) : L.dlTimeout);
+    if (phMid) {
+      await tg(env, "editMessageText", { chat_id: chatId, message_id: phMid, text: t, parse_mode: "HTML", reply_markup: links.length ? { inline_keyboard: dlLinkRows(L, items) } : undefined });
+      await deleteLater(env, chatId, phMid, dlMenuMs(env));
+    } else await reply(env, chatId, t);
+    return;
+  }
   const meta = res.meta || {};
   const photos = items.filter(x => x.kind === "photo");
   const va = items.filter(x => x.kind !== "photo");
   let photosDone = 0;
   let linkRows = [];
   if (photos.length) {
-    const ps = await dlSendFiles(env, chatId, photos, meta.title || "", L, url);
+    const ps = await dlSendFiles(env, chatId, photos, meta.title || "", L, url, budget);
     photosDone = ps.count;
     linkRows = dlRows(L, photos); // v2.67.0: semua foto bawa Direct Link (urutan asli carousel) — tombol nyempil di konfirmasi/menu
   }
@@ -858,7 +909,22 @@ export async function handleDl(env, msg, chatId) {
     if (phMid) await tg(env, "editMessageText", { chat_id: chatId, message_id: phMid, text: t, parse_mode: "HTML", reply_markup: mk });
     return;
   }
-  return dlMenuShow(env, chatId, L, phMid, plat, va, meta, photosDone, linkRows, url);
+  // Second low-budget exit: photos consumed the rest of the budget, so hand the video/audio
+  // variants over as links rather than starting a probe menu we cannot finish.
+  if (budget.left() < 8000) {
+    const links = linksOf(items);
+    const rows = linkRows.concat(dlLinkRows(L, va));
+    const t = L.dlSlowLinks(links);
+    if (phMid) {
+      await tg(env, "editMessageText", { chat_id: chatId, message_id: phMid, text: t, parse_mode: "HTML", reply_markup: rows.length ? { inline_keyboard: rows } : undefined });
+      await deleteLater(env, chatId, phMid, dlMenuMs(env));
+    } else await reply(env, chatId, t);
+    return;
+  }
+  return dlMenuShow(env, chatId, L, phMid, plat, va, meta, photosDone, linkRows, url, undefined, budget, linksOf(items));
+  } finally {
+    try { await env.KV.delete(recKey); } catch (_) {}
+  }
 }
 
 const hesc = s => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");

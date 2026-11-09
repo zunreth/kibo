@@ -163,6 +163,8 @@ export const YT_UP_PREFIX = "ytup:"; // "send it into the chat" token for a reso
 // both, an over-budget chain is killed mid-flight and the "fetching…" placeholder stays forever.
 export const YT_RESOLVE_PREFIX = "ytr:";   // in-flight resolve {chat,mid,kind,vid,ts} — closed by the watchdog
 export const YT_RESOLVE_DEAD_MS = 90000;   // a resolve record older than this = the invocation died
+// v2.78.2: /dl non-YouTube chains get the same wall-clock budget (env-tunable, default 60 s) — a
+// slow resolver that answers at the last second must not leave the photo-send/menu phase to die.
 export const SC_CID_KEY = "sc_cid"; // v2.78.0: SoundCloud client_id — rotates, cached ~1 h
 export const SC_CID_TTL_MS = 60 * 60 * 1000;
 export const SC_SEG_MAX = 26 * 1024 * 1024; // HLS concat ceiling (one isolate holds the blob)
@@ -279,7 +281,7 @@ export const CHAIN_BONUS = 50;
 export const CHAIN_SHIELD = 1; // v2.68.14: hadiah tamat arc = +1 shield (bukan hangus/deadline; benefit permanen jaga streak)
 export const CHAIN_GEN_STALE_MS = 180000;
 export const SYS_CHAIN = "You generate a tiny 5-day quest arc for the user's Telegram bot companion. Reply with EXACTLY one line, pipe-separated, NO extra text, no markdown, no quotes: ArcName | step1 | step2 | step3 | step4 | step5. ArcName = a catchy title (max 6 words) for a fun, imaginative mini-adventure rooted in everyday life — habits, fitness, productivity, learning, a cozy hobby, or a small personal project. Frame it like a light RPG challenge so it feels exciting, but keep it believable: the 5 steps are a connected journey (day 1 an easy warm-up, days 2-4 climbing the arc, day 5 a satisfying finish). Each step = a short vivid label (max 8 words) the user can picture themselves doing. Make it fun, punchy, and a little playful — but NOT absurd, cartoonish, or slapstick (no talking animals, no stealing, no magical hijinks). Each step builds on the previous.";
-export const BOT_VER = "2.78.1";
+export const BOT_VER = "2.78.2";
 
 // edit-fitur v2.63.0
 export const EDIT_MARKER = "//";
