@@ -1469,11 +1469,13 @@ async function pbQualities(env, url) {
   const vid = ytIdOf(url) || url;
   let c = null;
   try { c = await getJSON(env, "yt_q:" + vid, null); } catch (_) { c = null; }
-  if (c && Array.isArray(c.q) && c.ts && Date.now() - Number(c.ts) < 6 * 60 * 60 * 1000) return c.q;
-  const r = await pbYt(env, url, "1080");
-  const q = r && Array.isArray(r.q) ? r.q.map(x => ({ h: String(x.quality || "").replace(/p$/, ""), sz: Number(x.size) || 0 })).filter(x => /^\d{3,4}$/.test(x.h)) : [];
-  if (q.length) { try { await putJSON(env, "yt_q:" + vid, { q, ts: Date.now() }, env.DB ? { ttlMs: 6 * 60 * 60 * 1000 } : undefined); } catch (_) {} }
-  return q;
+  if (c && Array.isArray(c.q) && c.ts && Date.now() - Number(c.ts) < 6 * 60 * 60 * 1000) return { q: c.q, gated: !!c.gated };
+  const r = await pbYtEx(env, url, "1080");
+  const q = r.ok && Array.isArray(r.q) ? r.q.map(x => ({ h: String(x.quality || "").replace(/p$/, ""), sz: Number(x.size) || 0 })).filter(x => /^\d{3,4}$/.test(x.h)) : [];
+  // A gated clip is a property of the video, so remembering it is safe and saves a doomed resolve.
+  const gated = !r.ok && pbGated(r.err);
+  if (q.length || gated) { try { await putJSON(env, "yt_q:" + vid, { q, gated, ts: Date.now() }, env.DB ? { ttlMs: 6 * 60 * 60 * 1000 } : undefined); } catch (_) {} }
+  return { q, gated };
 }
 
 export async function ytMenuShow(env, chatId, L, mid, url, metaRaw) {
@@ -1489,8 +1491,10 @@ export async function ytMenuShow(env, chatId, L, mid, url, metaRaw) {
   const tok = rndTok();
   try { await putJSON(env, YT_BUILD_PREFIX + tok, { c: chatId, u: url, t: String(meta.title || "").slice(0, 120), ch: String(meta.author || "").slice(0, 60), exp: Date.now() + DL_SAV_TTL_MS }, env.DB ? { ttlMs: DL_SAV_TTL_MS } : undefined); } catch (_) {}
   // Buttons mirror what the provider actually offers, with its own sizes — no phantom rungs.
-  const qs = await pbQualities(env, url);
-  const rungs = qs.length ? qs.map(x => x.h) : ["144", "240", "360", "480", "720", "1080"];
+  // When the clip is gated there is nothing to mirror, so offer only what still works.
+  const pq = await pbQualities(env, url);
+  const qs = pq.q || [];
+  const rungs = qs.length ? qs.map(x => x.h) : pq.gated ? [] : ["144", "240", "360", "480", "720", "1080"];
   const rows = [];
   for (let i = 0; i < rungs.length; i += 3) {
     rows.push(rungs.slice(i, i + 3).map(h => ({
@@ -1500,7 +1504,7 @@ export async function ytMenuShow(env, chatId, L, mid, url, metaRaw) {
   }
   rows.push([{ text: L.ytBMp3, callback_data: "ytb:mp3:" + tok }, { text: L.ytsWatch, url }]);
   rows.push([{ text: L.ytBBtch, callback_data: "ytb:btch:" + tok }]);
-  return dlMenuShow(env, chatId, L, mid, "youtube", [], meta, 0, rows, url, L.ytMenuNote);
+  return dlMenuShow(env, chatId, L, mid, "youtube", [], meta, 0, rows, url, pq.gated && !qs.length ? L.ytMenuGated : L.ytMenuNote);
 }
 
 async function ytCacheGet(env, vid, kind) {
@@ -1565,9 +1569,13 @@ const YT_CAP_MB = { "144": 60, "240": 80, "360": 120, "480": 200, "720": 300, "1
 // puruboy = yt-dlp in an E2B sandbox, keyless, with a quality parameter and real sizes. Its
 // download URL is a token-gated proxy that refuses Telegram's fetchers (verified: sendVideo by
 // URL = 400 "failed to get HTTP URL content"), so the bytes come through us instead.
-async function pbYt(env, url, kind, tries, tmo) {
+// A failed resolve is not one thing: ytdownloader.tech answers 422 "That video could not be read"
+// for age/region-gated clips, while ordinary failures are network noise. Callers need that
+// distinction to say something true, so the reason rides along instead of collapsing into null.
+async function pbYtEx(env, url, kind, tries, tmo) {
   const q = kind === "mp3" ? "type=audio" : "quality=" + kind;
   const api = String(env.PURUBOY_BASE || PURUBOY_BASE).replace(/\/+$/, "") + "/api/downloader/youtube?url=" + encodeURIComponent(url) + "&" + q;
+  let err = "";
   for (let i = 0; i < (tries || 2); i++) {
     try {
       const r = await fetch(api, { headers: { "user-agent": UA }, signal: AbortSignal.timeout(tmo || 60000) });
@@ -1577,18 +1585,31 @@ async function pbYt(env, url, kind, tries, tmo) {
         const want = kind === "mp3" ? "" : kind + "p";
         const qs = Array.isArray(j.qualities) ? j.qualities : [];
         const row = qs.find(x => String(x.quality || "") === want) || null;
-        return { u, t: String(j.title || "").slice(0, 110), dur: Number(j.duration) || 0, sz: Number((j.download.size) || (row && row.size) || 0) || 0, fmt: kind === "mp3" ? "MP3" : kind + "p", q: qs };
+        return { ok: true, u, t: String(j.title || "").slice(0, 110), dur: Number(j.duration) || 0, sz: Number((j.download.size) || (row && row.size) || 0) || 0, fmt: kind === "mp3" ? "MP3" : kind + "p", q: qs, err: "" };
       }
-    } catch (_) {}
+      if (!err) err = j && j.error ? String(j.error).slice(0, 140) : "http " + r.status;
+    } catch (e) { if (!err) err = String((e && e.message) || e).slice(0, 140); }
   }
-  return null;
+  return { ok: false, err };
 }
+async function pbYt(env, url, kind, tries, tmo) {
+  const r = await pbYtEx(env, url, kind, tries, tmo);
+  return r.ok ? r : null;
+}
+// "could not be read" = the clip itself is gated (age / region / private), not a resolver outage.
+const pbGated = err => /could not be read|private|region|deleted|unavailable|not available|members/i.test(String(err || ""));
 
 // btch (btch-downloader-api-green.vercel.app) is the fast source: its proxy pushed 41 MB in
 // 1.4 s when measured, and it hands out both mp4 and mp3. No quality ladder — one file per kind.
 async function btchYt(env, url, kind) {
-  const api = String(env.BTCH_BASE || BTCH_BASE).replace(/\/+$/, "") + "/api/download/youtube?url=" + encodeURIComponent(url) + (kind === "mp3" ? "&type=audio" : "");
-  for (let i = 0; i < 2; i++) {
+  // Canonical watch URL: the short form silently drops the mp3 field on some clips.
+  const id = ytIdOf(url);
+  const target = id ? "https://www.youtube.com/watch?v=" + id : url;
+  const api = String(env.BTCH_BASE || BTCH_BASE).replace(/\/+$/, "") + "/api/download/youtube?url=" + encodeURIComponent(target) + (kind === "mp3" ? "&type=audio" : "");
+  // Vercel answers 502/504 in bursts while the function warms up; back-to-back retries land in the
+  // same bad window, so leave a gap between them.
+  for (let i = 0; i < 3; i++) {
+    if (i) await sleep(2500);
     try {
       const r = await fetch(api, { headers: { "user-agent": UA }, signal: AbortSignal.timeout(45000) });
       const j = await r.json().catch(() => null);
@@ -1721,17 +1742,24 @@ export async function handleYtBuild(env, cbId, chatId, mid, arg) {
   // Primary path: resolve here (seconds), post the link instantly, no GitHub Actions.
   if (kind === "btch") {
     // Owner's second source. Its proxy 403s in a browser ("Access to api.vidsnap.app was denied")
-    // and throttles to ~300 KB for us, so it is upload-only: never hand out a link we know is dead.
+    // and throttles for us, so it is upload-only: never hand out a link we know is dead.
     const b = await btchYt(env, e.u, "video");
-    if (b && await ytUploadResolved(env, chatId, L, wmid, b.u, "720", b.t || e.t || "", "BTCH", 30000)) return;
+    if (b && await ytUploadResolved(env, chatId, L, wmid, b.u, kind, b.t || e.t || "", "BTCH", 45000)) return;
   }
-  const pb = kind === "mp3" || kind === "btch" ? null : await pbYt(env, e.u, kind);
+  const pbx = kind === "mp3" || kind === "btch" ? { ok: false, err: "" } : await pbYtEx(env, e.u, kind);
+  const pb = pbx.ok ? pbx : null;
   if (pb) {
     await ytCachePut(env, vid, kind, { u: pb.u, host: "puruboy", t: pb.t || e.t || "", sz: pb.sz, fmt: pb.fmt, exp: "" });
     const upTok = rndTok();
     try { await putJSON(env, YT_UP_PREFIX + upTok, { c: chatId, u: pb.u, k: kind, t: pb.t || e.t || "", f: pb.fmt, exp: Date.now() + DL_SAV_TTL_MS }, env.DB ? { ttlMs: DL_SAV_TTL_MS } : undefined); } catch (_) {}
     const card = await ytLinkCard(env, chatId, L, wmid, pb.u, kind, pb.t || e.t || "", pb.sz || 0, { fmt: pb.fmt }, upTok);
     if (card) return;
+  }
+  // The rung the owner asked for is gone. btch reads plenty of what ytdownloader.tech refuses, so
+  // try it once — a 360p file beats a dead end — before offering a GitHub build.
+  if (!pb && kind !== "btch" && kind !== "mp3") {
+    const b = await btchYt(env, e.u, "video");
+    if (b && await ytUploadResolved(env, chatId, L, wmid, b.u, kind, b.t || e.t || "", "BTCH", 45000)) return;
   }
   if (kind === "mp3") {
     // Audio: every provider proxy either stalls (~300 KB) or 403s, so try the bytes once and fall
@@ -1742,7 +1770,7 @@ export async function handleYtBuild(env, cbId, chatId, mid, arg) {
   // Resolver is out: ask before spending a GitHub Actions run — never dispatch on our own.
   const gtok = rndTok();
   try { await putJSON(env, YT_BUILD_PREFIX + gtok, { c: chatId, u: e.u, t: String(e.t || "").slice(0, 120), exp: Date.now() + DL_SAV_TTL_MS }, env.DB ? { ttlMs: DL_SAV_TTL_MS } : undefined); } catch (_) {}
-  const ask = L.ytGhaAsk(kind) + "\n" + L.ytGhaNote;
+  const ask = (pbGated(pbx.err) ? L.ytGhaAskGate : L.ytGhaAsk(kind)) + "\n" + L.ytGhaNote;
   const kb = { inline_keyboard: [[{ text: L.ytGhaBtn, callback_data: "ytg:" + kind + ":" + gtok }]] };
   if (wmid) await tg(env, "editMessageText", { chat_id: chatId, message_id: wmid, text: ask, parse_mode: "HTML", reply_markup: kb });
   else await tg(env, "sendMessage", { chat_id: chatId, text: ask, parse_mode: "HTML", reply_markup: kb });
