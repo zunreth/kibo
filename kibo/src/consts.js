@@ -264,7 +264,7 @@ export const CHAIN_BONUS = 50;
 export const CHAIN_SHIELD = 1; // v2.68.14: hadiah tamat arc = +1 shield (bukan hangus/deadline; benefit permanen jaga streak)
 export const CHAIN_GEN_STALE_MS = 180000;
 export const SYS_CHAIN = "You generate a tiny 5-day quest arc for the user's Telegram bot companion. Reply with EXACTLY one line, pipe-separated, NO extra text, no markdown, no quotes: ArcName | step1 | step2 | step3 | step4 | step5. ArcName = a catchy title (max 6 words) for a fun, imaginative mini-adventure rooted in everyday life — habits, fitness, productivity, learning, a cozy hobby, or a small personal project. Frame it like a light RPG challenge so it feels exciting, but keep it believable: the 5 steps are a connected journey (day 1 an easy warm-up, days 2-4 climbing the arc, day 5 a satisfying finish). Each step = a short vivid label (max 8 words) the user can picture themselves doing. Make it fun, punchy, and a little playful — but NOT absurd, cartoonish, or slapstick (no talking animals, no stealing, no magical hijinks). Each step builds on the previous.";
-export const BOT_VER = "2.76.9";
+export const BOT_VER = "2.77.0";
 
 // edit-fitur v2.63.0
 export const EDIT_MARKER = "//";

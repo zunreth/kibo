@@ -436,7 +436,7 @@ async function rawResolve(env, url, plat) {
         const e = await ttEmbedResolve(cu);
         if (e) rr = { items: e.items.concat(rr.items), meta: { title: rr.meta.title || "" } };
       }
-      r = rr || (await ttEmbedResolve(url)) || (await tikwmResolve(url)) || (await fsTtResolve(url)) || (await puruTtResolve(env, url));
+      r = rr || (await ttEmbedResolve(url)) || (await tikwmResolve(url)) || (await fsTtResolve(url)) || (await nxTtResolve(env, url)) || (await puruTtResolve(env, url));
     }
     if (r && !(r.meta && r.meta.title && r.meta.author)) { const tm = await ttMeta(env, cu); if (tm) { r.meta = r.meta || {}; r.meta.title = r.meta.title || tm.title; r.meta.author = r.meta.author || tm.author; } } // oEmbed tiktok keyless = judul+author (blog tt 23 Okt)
     return r;
@@ -463,7 +463,9 @@ async function rawResolve(env, url, plat) {
   if (plat === "spotify") {
     const b = await btchPlat(env, url, "spotify");
     if (b) return b;
-    const k = await kyioSpotifyResolve(url); // fallback #2 (kyio 10 RPM shared-IP — cache 1h di atasnya, jarang kepanggil)
+    const n = await nxSpotifyResolve(env, url); // fallback #2: independent of spotimate, same 320 kbps source
+    if (n) return n;
+    const k = await kyioSpotifyResolve(url); // fallback #3 (kyio 10 RPM shared-IP — cache 1h di atasnya, jarang kepanggil)
     return k ? { items: k.items, meta: { title: k.title || "" } } : null;
   }
   return null;
@@ -1653,6 +1655,39 @@ async function nxMp3(env, url) {
     } catch (_) {}
   }
   return null;
+}
+
+// Nexray's non-YouTube routes. Measured 9 Nov: /downloader/spotify hands back a 320 kbps MP3 on
+// rapid.spotidown.app (8.7 MB, 3.2 MB/s), /downloader/tiktok hands back the original TikTok CDN
+// video plus its audio track. They share no upstream with btch or ssstik, which is the point —
+// a second opinion on the days those two answer 502.
+async function nxGet(env, path, tmo) {
+  const base = String(env.NEXRAY_BASE || NEXRAY_BASE).replace(/\/+$/, "");
+  try {
+    const j = await getJSONh(base + path, tmo || 30000);
+    if (env.__probe) env.__probe.push({ mid: null, method: "nexray", chat: 0, text: String(JSON.stringify(j || {})).slice(0, 120) });
+    return j;
+  } catch (_) { return null; }
+}
+async function nxSpotifyResolve(env, url) {
+  const j = await nxGet(env, "/downloader/spotify?url=" + encodeURIComponent(url));
+  const r = j && j.status && j.result ? j.result : null;
+  const u = r ? String(r.url || "") : "";
+  if (!dlUrlOk(u)) return null;
+  const title = ((r.artist ? String(r.artist) + " - " : "") + String(r.title || "")).slice(0, 120);
+  return { items: [{ kind: "audio", url: u }], title };
+}
+async function nxTtResolve(env, url) {
+  const j = await nxGet(env, "/downloader/tiktok?url=" + encodeURIComponent(url));
+  const r = j && j.status && j.result ? j.result : null;
+  if (!r) return null;
+  const items = [];
+  if (dlUrlOk(r.data)) items.push({ kind: "video", url: String(r.data) });
+  const mu = r.music_info && r.music_info.url;
+  if (dlUrlOk(mu)) items.push({ kind: "audio", url: String(mu) });
+  if (!items.length) return null;
+  const a = r.author || {};
+  return { items: items.slice(0, DL_MAX_LINKS), meta: { title: String(r.title || "").slice(0, 180), author: String(a.nickname || a.fullname || "").slice(0, 60) } };
 }
 
 // Resolver bytes → Telegram. 40 MB is our own ceiling (one isolate holds the blob); past that the
