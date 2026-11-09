@@ -1,6 +1,6 @@
 import { tg, reply, getJSON, putJSON, scheduleDelete, tgErrLog, tgUpTmo, NH_FMT_ALIAS, nhDefFmt, nhHost, nhPdfQ } from "./base.js";
 import { uiLang, SEP_LINE } from "./ui.js";
-import { UA, UA_BOT, DL_CACHE_PREFIX, DL_CACHE_TTL_MS, DL_MAX_LINKS, DL_SEND_MAX, DL_URL_SEND_MAX, DL_SEND_PHOTO_MAX, FGSI_IG_URL, FGSI_KEY, KYIO_BASE, DL_DEL_MS, DELQ_KEY, DL_MENU_TTL_MS, DL_PICK_PREFIX, DL_SAV_PREFIX, DL_SAV_TTL_MS, DL_BIG_PREFIX, YT_PICK_PREFIX, YT_BUILD_PREFIX, YT_JOB_PREFIX, YT_BUSY_PREFIX, YT_CACHE_PREFIX, YT_CACHE_TTL_MS, YT_CACHE_TTL_TMP_MS, YT_UP_PREFIX, PURUBOY_BASE, BTCH_BASE, YT_UPLOAD_MAX, YTS_MAX, NH_SAVE_PREFIX, NH_SAVES_KEY, NH_AUTODEL_MS, NH_JOB_PREFIX, NH_JOB_TTL_MS, NH_BUSY_PREFIX, NH_KEEP_PREFIX, NH_CACHE_PREFIX, NH_CACHE_TTL_MS, NH_CACHE_TTL_TMP_MS, NH_RECENT_KEY, NH_RECENT_MAX, NH_STAT_PREFIX, NH_STAT_TTL_MS, NH_DEAD_MS, VAULT_CHAT_KEY, FILE_INDEX_KEY } from "./consts.js";
+import { UA, UA_BOT, DL_CACHE_PREFIX, DL_CACHE_TTL_MS, DL_MAX_LINKS, DL_SEND_MAX, DL_URL_SEND_MAX, DL_SEND_PHOTO_MAX, FGSI_IG_URL, FGSI_KEY, KYIO_BASE, DL_DEL_MS, DELQ_KEY, DL_MENU_TTL_MS, DL_PICK_PREFIX, DL_SAV_PREFIX, DL_SAV_TTL_MS, DL_BIG_PREFIX, YT_PICK_PREFIX, YT_BUILD_PREFIX, YT_JOB_PREFIX, YT_BUSY_PREFIX, YT_CACHE_PREFIX, YT_CACHE_TTL_MS, YT_CACHE_TTL_TMP_MS, YT_UP_PREFIX, PURUBOY_BASE, BTCH_BASE, NEXRAY_BASE, YT_UPLOAD_MAX, YTS_MAX, NH_SAVE_PREFIX, NH_SAVES_KEY, NH_AUTODEL_MS, NH_JOB_PREFIX, NH_JOB_TTL_MS, NH_BUSY_PREFIX, NH_KEEP_PREFIX, NH_CACHE_PREFIX, NH_CACHE_TTL_MS, NH_CACHE_TTL_TMP_MS, NH_RECENT_KEY, NH_RECENT_MAX, NH_STAT_PREFIX, NH_STAT_TTL_MS, NH_DEAD_MS, VAULT_CHAT_KEY, FILE_INDEX_KEY } from "./consts.js";
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
@@ -1633,6 +1633,28 @@ async function btchYt(env, url, kind) {
 }
 const btchAudio = (env, url) => btchYt(env, url, "mp3");
 
+// Nexray's ytmp3 is the one audio source that survives: it answers with a link to a public proxy
+// (beta.123tokyo.xyz) that serves a real MP3 to any caller, unlike every video route we have seen
+// (measured 3.7 MB, ID3 v2.3, 64 kbps, 1.7 MB/s from an unrelated host). Its aio route is not used
+// here — those googlevideo URLs are signed for the resolver's own IP and answer 403 for us.
+async function nxMp3(env, url) {
+  const id = ytIdOf(url);
+  const target = id ? "https://www.youtube.com/watch?v=" + id : url;
+  const api = String(env.NEXRAY_BASE || NEXRAY_BASE).replace(/\/+$/, "") + "/downloader/ytmp3?url=" + encodeURIComponent(target) + "&_=" + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+  for (let i = 0; i < 2; i++) {
+    if (i) await sleep(1200);
+    try {
+      const r = await fetch(api, { headers: { "user-agent": UA }, signal: AbortSignal.timeout(45000) });
+      const j = await r.json().catch(() => null);
+      if (env.__probe) env.__probe.push({ mid: null, method: "nexray", chat: 0, text: r.status + " " + String(JSON.stringify(j || {})).slice(0, 120) });
+      const res = j && j.status && j.result ? j.result : null;
+      const u = res ? String(res.url || "") : "";
+      if (/^https:\/\/\S+$/.test(u)) return { u, t: String(res.title || "").slice(0, 110), sz: Number(res.filesize) || 0, fmt: "MP3" };
+    } catch (_) {}
+  }
+  return null;
+}
+
 // Resolver bytes → Telegram. 40 MB is our own ceiling (one isolate holds the blob); past that the
 // link is the honest answer, because Telegram cannot fetch these hosts itself.
 async function ytPull(env, chatId, url, tmo) {
@@ -1746,7 +1768,12 @@ export async function handleYtUpload(env, cbId, chatId, mid, tok) {
   // The stored link is the stale one (resolver tokens expire in minutes): resolve again and retry
   // before telling anyone the pull failed.
   let ok2 = false;
-  if (e.y) {
+  if (e.y && e.k === "mp3") {
+    // A stored MP3 link is a Nexray proxy link; minting a fresh one costs a single request.
+    const nx = await nxMp3(env, e.y);
+    if (nx) ok2 = await ytUploadResolved(env, chatId, L, mid, nx.u, "mp3", e.t || nx.t || "", "MP3", 45000);
+  }
+  if (!ok2 && e.y) {
     // The requested rung may be the one the resolver cannot fetch right now; try the others too.
     const rungs = e.k === "mp3" ? ["144", "360", "240"] : [e.k || "360", "360", "144"].filter((v, i, a) => a.indexOf(v) === i);
     for (const rung of rungs) {
@@ -1825,6 +1852,10 @@ export async function handleYtBuild(env, cbId, chatId, mid, arg) {
     if (b && await ytUploadResolved(env, chatId, L, wmid, b.u, kind, b.t || e.t || "", "BTCH", 45000)) return;
   }
   if (kind === "mp3") {
+    // Nexray first: it is the only provider that returns an actual MP3 file. Everything below it is
+    // the older chain (btch audio, then a muxed mp4 re-sent as .m4a) and stays as fallback.
+    const nx = await nxMp3(env, e.u);
+    if (nx && await ytUploadResolved(env, chatId, L, wmid, nx.u, "mp3", nx.t || e.t || "", "MP3", 45000)) return;
     // Audio: every provider proxy either stalls (~300 KB) or 403s, so try the bytes once and fall
     // through to the confirmed GitHub build instead of handing over a dead link.
     const a = await btchAudio(env, e.u);
