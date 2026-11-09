@@ -157,16 +157,31 @@ export const YT_CACHE_PREFIX = "yt_cache:"; // build result per video+kind → n
 export const YT_CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 export const YT_CACHE_TTL_TMP_MS = 3 * 24 * 60 * 60 * 1000;
 export const YT_UP_PREFIX = "ytup:"; // "send it into the chat" token for a resolver link (bytes through us)
+// v2.78.1: the resolve chain gets a wall-clock budget and a job record. The webhook answers 200 in
+// milliseconds and Cloudflare keeps the isolate alive only ~30 s past that (measured: a 28 s sleep
+// survives, 32 s does not), while the chain below can spend minutes in per-hop timeouts. Without
+// both, an over-budget chain is killed mid-flight and the "fetching…" placeholder stays forever.
+export const YT_RESOLVE_PREFIX = "ytr:";   // in-flight resolve {chat,mid,kind,vid,ts} — closed by the watchdog
+export const YT_RESOLVE_DEAD_MS = 90000;   // a resolve record older than this = the invocation died
+export const SC_CID_KEY = "sc_cid"; // v2.78.0: SoundCloud client_id — rotates, cached ~1 h
+export const SC_CID_TTL_MS = 60 * 60 * 1000;
+export const SC_SEG_MAX = 26 * 1024 * 1024; // HLS concat ceiling (one isolate holds the blob)
+export const YT_AIO_PREFIX = "yt_aio:"; // v2.78.0: nexray aio rung list + muxed 360p URL, per video
 // v2.76.2: puruboy is the only working keyless YouTube resolver left (yt-dlp in an E2B sandbox
 // behind a token-gated proxy). Its links refuse Telegram's fetchers, so the Worker downloads and
 // re-uploads the bytes itself — no GitHub Actions unless the resolver is down.
 export const PURUBOY_BASE = "https://na-api-nue-api-e7bfd3f4.koyeb.app";
 export const BTCH_BASE = "https://btch-downloader-api-green.vercel.app"; // fast proxy (29 MB/s measured), no quality ladder
 // v2.76.9: Nexray is the only source that hands out a real MP3 (its ytmp3 route proxies to
-// beta.123tokyo.xyz, which answers any IP). Its video route is not usable: /downloader/aio returns
-// googlevideo URLs signed for the resolver's own address (5 of 6 clips answered 403 from another
-// host), so video stays on puruboy/btch.
+// beta.123tokyo.xyz, which answers any IP).
+// v2.78.0: its /downloader/aio DOES have one usable YouTube rung — itag 18, a muxed 360p
+// (avc1+mp4a in one file). Everything above it is a DASH stream with no audio track, and the
+// URLs are signed to whichever IP resolved them (measured 2 of 3 clips worked from our egress),
+// so every rung has to be probed before it becomes a button.
 export const NEXRAY_BASE = "https://api.nexray.eu.cc";
+// v2.78.0: sparky is the sturdiest keyless TikTok/IG/FB resolver left (20/20 burst, 20/20
+// sequential in the Nov research) — a second opinion for the days btch answers 502.
+export const SPARKY_BASE = "https://api-aswin-sparky.koyeb.app";
 export const YT_UPLOAD_MAX = 40 * 1024 * 1024; // multipart ceiling we can hold in one isolate
 // v2.69.13: album full-Worker VPS-independent — nhMeta cuma ke nhdl-w (mirror cin.guru + API fallback + cache); /nh tanpa format WAJIB album; gak ada egress VPS buat metadata
 export const NH_SAVE_PREFIX = "nhsav:";   // token button "Simpan ke vault" bawa {id,title,pages}
@@ -264,7 +279,7 @@ export const CHAIN_BONUS = 50;
 export const CHAIN_SHIELD = 1; // v2.68.14: hadiah tamat arc = +1 shield (bukan hangus/deadline; benefit permanen jaga streak)
 export const CHAIN_GEN_STALE_MS = 180000;
 export const SYS_CHAIN = "You generate a tiny 5-day quest arc for the user's Telegram bot companion. Reply with EXACTLY one line, pipe-separated, NO extra text, no markdown, no quotes: ArcName | step1 | step2 | step3 | step4 | step5. ArcName = a catchy title (max 6 words) for a fun, imaginative mini-adventure rooted in everyday life — habits, fitness, productivity, learning, a cozy hobby, or a small personal project. Frame it like a light RPG challenge so it feels exciting, but keep it believable: the 5 steps are a connected journey (day 1 an easy warm-up, days 2-4 climbing the arc, day 5 a satisfying finish). Each step = a short vivid label (max 8 words) the user can picture themselves doing. Make it fun, punchy, and a little playful — but NOT absurd, cartoonish, or slapstick (no talking animals, no stealing, no magical hijinks). Each step builds on the previous.";
-export const BOT_VER = "2.77.0";
+export const BOT_VER = "2.78.1";
 
 // edit-fitur v2.63.0
 export const EDIT_MARKER = "//";

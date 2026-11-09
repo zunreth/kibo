@@ -1,8 +1,44 @@
 import { tg, reply, getJSON, putJSON, scheduleDelete, tgErrLog, tgUpTmo, NH_FMT_ALIAS, nhDefFmt, nhHost, nhPdfQ } from "./base.js";
 import { uiLang, SEP_LINE } from "./ui.js";
-import { UA, UA_BOT, DL_CACHE_PREFIX, DL_CACHE_TTL_MS, DL_MAX_LINKS, DL_SEND_MAX, DL_URL_SEND_MAX, DL_SEND_PHOTO_MAX, FGSI_IG_URL, FGSI_KEY, KYIO_BASE, DL_DEL_MS, DELQ_KEY, DL_MENU_TTL_MS, DL_PICK_PREFIX, DL_SAV_PREFIX, DL_SAV_TTL_MS, DL_BIG_PREFIX, YT_PICK_PREFIX, YT_BUILD_PREFIX, YT_JOB_PREFIX, YT_BUSY_PREFIX, YT_CACHE_PREFIX, YT_CACHE_TTL_MS, YT_CACHE_TTL_TMP_MS, YT_UP_PREFIX, PURUBOY_BASE, BTCH_BASE, NEXRAY_BASE, YT_UPLOAD_MAX, YTS_MAX, NH_SAVE_PREFIX, NH_SAVES_KEY, NH_AUTODEL_MS, NH_JOB_PREFIX, NH_JOB_TTL_MS, NH_BUSY_PREFIX, NH_KEEP_PREFIX, NH_CACHE_PREFIX, NH_CACHE_TTL_MS, NH_CACHE_TTL_TMP_MS, NH_RECENT_KEY, NH_RECENT_MAX, NH_STAT_PREFIX, NH_STAT_TTL_MS, NH_DEAD_MS, VAULT_CHAT_KEY, FILE_INDEX_KEY } from "./consts.js";
+import { UA, UA_BOT, DL_CACHE_PREFIX, DL_CACHE_TTL_MS, DL_MAX_LINKS, DL_SEND_MAX, DL_URL_SEND_MAX, DL_SEND_PHOTO_MAX, FGSI_IG_URL, FGSI_KEY, KYIO_BASE, DL_DEL_MS, DELQ_KEY, DL_MENU_TTL_MS, DL_PICK_PREFIX, DL_SAV_PREFIX, DL_SAV_TTL_MS, DL_BIG_PREFIX, YT_PICK_PREFIX, YT_BUILD_PREFIX, YT_JOB_PREFIX, YT_BUSY_PREFIX, YT_RESOLVE_PREFIX, YT_RESOLVE_DEAD_MS, YT_CACHE_PREFIX, YT_CACHE_TTL_MS, YT_CACHE_TTL_TMP_MS, YT_UP_PREFIX, YT_AIO_PREFIX, SC_CID_KEY, SC_CID_TTL_MS, SC_SEG_MAX, PURUBOY_BASE, BTCH_BASE, NEXRAY_BASE, SPARKY_BASE, YT_UPLOAD_MAX, YTS_MAX, NH_SAVE_PREFIX, NH_SAVES_KEY, NH_AUTODEL_MS, NH_JOB_PREFIX, NH_JOB_TTL_MS, NH_BUSY_PREFIX, NH_KEEP_PREFIX, NH_CACHE_PREFIX, NH_CACHE_TTL_MS, NH_CACHE_TTL_TMP_MS, NH_RECENT_KEY, NH_RECENT_MAX, NH_STAT_PREFIX, NH_STAT_TTL_MS, NH_DEAD_MS, VAULT_CHAT_KEY, FILE_INDEX_KEY } from "./consts.js";
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+// v2.78.1: the resolve chain needs one wall-clock budget, not just per-hop timeouts.
+// Per-hop caps add up far past what a single webhook may take (btch alone is 3 × 45 s, and the
+// handler stops waiting for the chain at 55 s), so a slow source used to be cut off mid-chain and
+// its "fetching…" placeholder was never replaced. Measured on this account: work that continues
+// after the response is delivered is killed at ~30 s (a 28 s ctx.waitUntil sleep completes, a 32 s
+// one does not) — so the chain must finish while the request is still open.
+const YT_BUDGET_MS = env => parseInt((env && env.YT_RESOLVE_BUDGET_MS) || "", 10) || 40000;
+// One wall-clock budget per interactive media chain, so every hop can ask what is left instead of
+// spending its own timeout and pushing the whole chain past the point where the isolate is cut.
+// The absolute deadline matters as much as the remaining time: a body read that stalls after a 200
+// still has to be abandoned, or the per-hop cap is spent twice.
+function wallBudget(total) {
+  const t0 = Date.now();
+  const deadline = t0 + total;
+  return {
+    left: () => deadline - Date.now(),
+    deadline: () => deadline,
+    // what a single hop may spend: its own cap, never more than what is left
+    slice: cap => Math.max(0, Math.min(cap, deadline - Date.now()))
+  };
+}
+const ytBudget = env => wallBudget(YT_BUDGET_MS(env));
+const scBudget = env => wallBudget(parseInt((env && env.SC_RESOLVE_BUDGET_MS) || "", 10) || 40000);
+// The timeout to hand a fetch inside a hop: values under a second abort before the request even
+// starts, so floor it — the budget check above is what decides whether the hop runs at all.
+const hopMs = ms => Math.max(1000, Math.floor(ms || 0));
+// Metadata hops have no delivery side effects, so abandoning one is safe: the loser of the race is
+// simply left to expire. Upload hops must NOT be raced — an abandoned upload can still deliver.
+async function ytWithin(ms, fn, fallback) {
+  if (ms <= 0) return fallback;
+  let to = null;
+  try {
+    return await Promise.race([fn(), new Promise(r => { to = setTimeout(() => r(fallback), ms); })]);
+  } catch (_) { return fallback; } finally { if (to) clearTimeout(to); }
+}
 
 export function syndToken(id) {
   return ((Number(id) / 1e15) * Math.PI).toString(36).replace(/[.0]/g, "");
@@ -18,6 +54,8 @@ export function dlPlatform(raw) {
   if (/(^|\.)youtube\.com$/.test(h) || h === "youtu.be") return "youtube";
   if (/(^|\.)instagram\.com$/.test(h)) return "instagram";
   if (/(^|\.)spotify\.com$/.test(h)) return "spotify";
+  if (/(^|\.)facebook\.com$/.test(h) || h === "fb.watch" || /(^|\.)fb\.com$/.test(h)) return "facebook";
+  if (/(^|\.)soundcloud\.com$/.test(h) || h === "snd.sc") return "soundcloud";
   return null;
 }
 
@@ -436,7 +474,7 @@ async function rawResolve(env, url, plat) {
         const e = await ttEmbedResolve(cu);
         if (e) rr = { items: e.items.concat(rr.items), meta: { title: rr.meta.title || "" } };
       }
-      r = rr || (await ttEmbedResolve(url)) || (await tikwmResolve(url)) || (await fsTtResolve(url)) || (await nxTtResolve(env, url)) || (await puruTtResolve(env, url));
+      r = rr || (await ttEmbedResolve(url)) || (await tikwmResolve(url)) || (await fsTtResolve(url)) || (await nxTtResolve(env, url)) || (await spTtResolve(env, url)) || (await puruTtResolve(env, url));
     }
     if (r && !(r.meta && r.meta.title && r.meta.author)) { const tm = await ttMeta(env, cu); if (tm) { r.meta = r.meta || {}; r.meta.title = r.meta.title || tm.title; r.meta.author = r.meta.author || tm.author; } } // oEmbed tiktok keyless = judul+author (blog tt 23 Okt)
     return r;
@@ -444,7 +482,7 @@ async function rawResolve(env, url, plat) {
   if (plat === "x") {
     const s = xStatus(new URL(url));
     if (!s) return null;
-    return (await fxResolve(s.user, s.id)) || (await syndResolve(s.id));
+    return (await fxResolve(s.user, s.id)) || (await vxResolve(s.user, s.id)) || (await syndResolve(s.id));
   }
   if (plat === "youtube") return ytResolve(env, url);
   if (plat === "instagram") {
@@ -455,10 +493,19 @@ async function rawResolve(env, url, plat) {
     if (ck && ck.items) return ck;
     const f = await fgsiIgResolve(url);
     if (f) return f;
+    const nxig = await nxIgResolve(env, url); // v2.78.0: full carousels, independent upstream
+    if (nxig) return nxig;
     const bt = await btchPlat(env, url, "instagram");
     if (bt) return bt;
     if (ck && ck.authdead) return { authdead: 1 };
     return e && e.blocked ? { blocked: 1 } : null;
+  }
+  if (plat === "facebook") {
+    // v2.78.0: two keyless resolvers, both measured 9 Nov — nexray hands out fbcdn low/high and
+    // sparky points at the very same fbcdn object (5,388,007 B, avc1+mp4a, 206 from our egress).
+    const n = await nxFbResolve(env, url);
+    if (n) return n;
+    return await spFbResolve(env, url);
   }
   if (plat === "spotify") {
     const b = await btchPlat(env, url, "spotify");
@@ -679,7 +726,7 @@ export async function deleteLater(env, chatId, mid, ms, keepKey) {
 const rndTok = () => Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4);
 const fmtDur = s => { s = Math.round(Number(s) || 0); return s ? Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0") : ""; };
 export function dlMenuText(L, plat, meta, photosDone, vaItems, urlOnly, note) {
-  const names = { tiktok: "TikTok", x: "X (Twitter)", youtube: "YouTube", instagram: "Instagram", song: "Song search", spotify: "Spotify" };
+  const names = { tiktok: "TikTok", x: "X (Twitter)", youtube: "YouTube", instagram: "Instagram", song: "Song search", spotify: "Spotify", facebook: "Facebook", soundcloud: "SoundCloud" };
   const lines = [L.dlMenuHead];
   if (photosDone) lines.push(L.dlPhotosDone(photosDone));
   const vids = (vaItems || []).filter(x => x.kind === "video" && x.pos);
@@ -776,6 +823,8 @@ export async function handleDl(env, msg, chatId) {
   const url = raw.split(/\s+/)[0];
   const plat = url ? dlPlatform(url) : null;
   if (!plat) return reply(env, chatId, L.dlUsage);
+  // v2.78.0: SoundCloud has no resolver left, so the bytes are assembled here instead of resolved.
+  if (plat === "soundcloud") return handleSoundCloud(env, msg, chatId);
   await tg(env, "sendChatAction", { chat_id: chatId, action: "typing" });
   const ph = await tg(env, "sendMessage", { chat_id: chatId, text: L.dlWorking, parse_mode: "HTML" });
   const phMid = ph && ph.ok && ph.result ? ph.result.message_id : 0;
@@ -874,6 +923,136 @@ export async function handleSpotify(env, msg, chatId) {
   return musicReply(env, chatId, L, res, "spotify", q);
 }
 
+// ===== v2.78.0: SoundCloud, done by hand (no keyless resolver survives) =====
+// Chain, verified end to end from a Worker: homepage → the one asset bundle that carries
+// client_id (32 chars, ~2.9 MB, 63 ms) → /resolve → transcodings[] (all HLS now) → the playlist
+// URL → #EXT-X-MAP init.mp4 + one .m4s per segment, concatenated in order. The result is a valid
+// fragmented MP4 that Telegram accepts as audio (probed: ok:true, audio/mp4, 5,447,799 B).
+async function scClientId(env) {
+  try {
+    const c = await getJSON(env, SC_CID_KEY, null);
+    if (c && c.id && c.ts && Date.now() - Number(c.ts) < SC_CID_TTL_MS) return String(c.id);
+  } catch (_) {}
+  // The homepage links several bundles; the id lives in the biggest one. Walk them newest-first
+  // instead of hardcoding a hash — SoundCloud renames that file on every deploy.
+  const hp = await getText("https://soundcloud.com/", UA);
+  const assets = [...new Set((String(hp || "").match(/https:\/\/a-v2\.sndcdn\.com\/assets\/[0-9a-zA-Z._-]*\.js/g) || []))].reverse();
+  for (const a of assets) {
+    const js = await getText(a, UA);
+    const m = String(js || "").match(/client_id[:=]"([A-Za-z0-9]{32})/);
+    if (m) {
+      try { await putJSON(env, SC_CID_KEY, { id: m[1], ts: Date.now() }, env.DB ? { ttlMs: SC_CID_TTL_MS } : undefined); } catch (_) {}
+      return m[1];
+    }
+  }
+  return "";
+}
+// Permalinks are the reliable input; /resolve answers 404 for anything that is not a track or set.
+async function scResolveTrack(env, url) {
+  const cid = await scClientId(env);
+  if (!cid) return null;
+  const j = await getJSONh("https://api-v2.soundcloud.com/resolve?url=" + encodeURIComponent(url) + "&client_id=" + cid, 20000);
+  if (!j || !j.kind) return null;
+  if (j.kind !== "track") return { set: 1, title: String(j.title || "").slice(0, 110) }; // playlists are a later step, not a silent fail
+  const tc = (j.media && Array.isArray(j.media.transcodings) ? j.media.transcodings : []).slice().sort((a, b) => (b.quality === "hq" ? 1 : 0) - (a.quality === "hq" ? 1 : 0));
+  const pick = tc.find(x => String(x.preset) === "aac_160k") || tc[0];
+  if (!pick || !pick.url) return null;
+  return { cid, tcUrl: String(pick.url), title: String(j.title || "").slice(0, 110), artist: String((j.user && j.user.username) || "").slice(0, 60), dur: Math.round((Number(j.duration) || 0) / 1000), fmt: String(pick.preset || "").replace("aac_", "") + "k" };
+}
+// Segment fetch, a few at a time: 27 serial requests would be slow, an unbounded burst gets
+// throttled. Four at a time measured 1.4 s for the whole track. The per-segment timeout follows
+// what is left of the chain's budget: a stalled CDN used to be able to spend 25 s each and leave
+// the "pulling the track…" message behind forever.
+async function scHlsBytes(env, plUrl, bud) {
+  const mp = await getText(plUrl, UA);
+  if (!mp) return null;
+  const init = (String(mp).match(/#EXT-X-MAP:URI="([^"]+)"/) || [])[1] || "";
+  const segs = String(mp).split("\n").filter(l => l.startsWith("https://"));
+  if (!segs.length) return null;
+  // One metric: a Worker may open 50 subrequests, and the metadata calls above already spent a few.
+  // A 27-segment track (5 min) measured 33 total. Anything past ~35 segments will not fit, so say so
+  // instead of dying halfway with a truncated file.
+  if (segs.length > 35) return { tooBig: 1 };
+  const parts = [init].concat(segs).filter(Boolean);
+  const chunks = [];
+  let got = 0;
+  const segMs = hopMs(bud ? bud.slice(25000) : 25000);
+  for (let i = 0; i < parts.length; i += 4) {
+    if (bud && bud.left() < 8000) return { stuck: 1 }; // out of budget mid-assembly: say so, do not truncate
+    const rs = await Promise.all(parts.slice(i, i + 4).map(u => fetch(u, { headers: { "user-agent": UA }, signal: AbortSignal.timeout(segMs) }).then(r => (r.ok ? r.arrayBuffer() : null)).catch(() => null)));
+    for (const b of rs) {
+      if (!b || !b.byteLength) continue;
+      got += b.byteLength;
+      if (got > SC_SEG_MAX) return null; // a set, not a track — do not blow the isolate
+      chunks.push(new Uint8Array(b));
+    }
+    if (env.__probe) env.__probe.push({ mid: null, method: "scseg", chat: 0, text: (i + 4) + "/" + parts.length + " " + got });
+  }
+  if (!chunks.length) return null;
+  const head = chunks.map(c => String.fromCharCode(c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7])).join("");
+  if (!head.includes("ftyp")) return null; // not an MP4 = the CDN answered something else
+  return { chunks, size: got };
+}
+async function scFetch(env, url, bud) {
+  const t = await scResolveTrack(env, url);
+  if (!t || !t.tcUrl) return t && t.set ? t : null;
+  if (bud && bud.left() < 15000) return { stuck: 1 };
+  const pl = await getJSONh(t.tcUrl + "?client_id=" + t.cid, 20000);
+  const plUrl = pl && pl.url ? String(pl.url) : "";
+  if (!plUrl.startsWith("https://")) return null;
+  const f = await scHlsBytes(env, plUrl, bud);
+  if (!f) return null;
+  if (f.stuck) return { stuck: 1, title: t.title };
+  if (f.tooBig) return { tooBig: 1, title: t.title };
+  return Object.assign({ chunks: f.chunks, size: f.size }, t);
+}
+async function scUpload(env, chatId, sc, title) {
+  const name = String(title || sc.artist || "SoundCloud").replace(/[\\/:*?"<>|]+/g, " ").trim().slice(0, 60) || "audio";
+  const form = new FormData();
+  form.append("chat_id", String(chatId));
+  form.append("audio", new Blob(sc.chunks, { type: "audio/mp4" }), name + ".m4a");
+  form.append("title", name);
+  if (sc.artist) form.append("performer", String(sc.artist));
+  if (sc.dur > 0) form.append("duration", String(sc.dur));
+  try {
+    const r = await fetch("https://api.telegram.org/bot" + env.TG_TOKEN + "/sendAudio", { method: "POST", body: form, signal: tgUpTmo(env) });
+    const j = await r.json().catch(() => null);
+    if (!j || !j.ok) tgErrLog(env, "sendAudio", j);
+    if (env.__probe && j && j.ok) env.__probe.push({ mid: (j.result && j.result.message_id) || null, method: "sendAudio", chat: chatId, text: "SC " + name, fn: name + ".m4a" });
+    return j;
+  } catch (_) { return null; }
+}
+export async function handleSoundCloud(env, msg, chatId) {
+  const L = await uiLang(env);
+  const raw = (msg.text || "").replace(/^\/\S+\s*/, "").trim();
+  const url = (raw.split(/\s+/)[0] || "").split("?")[0];
+  if (!/^https?:\/\//.test(url)) return reply(env, chatId, L.dlUsage);
+  await tg(env, "sendChatAction", { chat_id: chatId, action: "typing" });
+  const ph = await tg(env, "sendMessage", { chat_id: chatId, text: L.scWorking, parse_mode: "HTML" });
+  const phMid = ph && ph.ok && ph.result ? ph.result.message_id : 0;
+  // The assembly is a bounded burst of segment fetches. Budgeted, so a stalled CDN ends in a message
+  // instead of a "pulling the track…" that stays on screen after the invocation is cut.
+  const bud = scBudget(env);
+  const recKey = YT_RESOLVE_PREFIX + rndTok();
+  try { await putJSON(env, recKey, { chat: chatId, mid: phMid, kind: "sc", vid: "sc", ts: Date.now() }, env.DB ? { ttlMs: 10 * 60 * 1000 } : undefined); } catch (_) {}
+  const sc = await scFetch(env, url, bud).catch(() => null);
+  const fail = async t => {
+    if (phMid) { await tg(env, "editMessageText", { chat_id: chatId, message_id: phMid, text: t, parse_mode: "HTML" }); await deleteLater(env, chatId, phMid, dlDelMs(env)); }
+    else await reply(env, chatId, t);
+    try { await env.KV.delete(recKey); } catch (_) {}
+  };
+  if (!sc) return fail(L.scFail);
+  if (sc.stuck) return fail(L.ytStuck);
+  if (sc.set) return fail(L.scSet);
+  if (sc.tooBig) return fail(L.scLong);
+  const title = sc.artist ? sc.artist + " - " + sc.title : sc.title;
+  const j = await scUpload(env, chatId, sc, title);
+  if (!j || !j.ok) return fail(L.scSendFail);
+  try { await env.KV.delete(recKey); } catch (_) {}
+  const mid = (j.result && j.result.message_id) || 0;
+  if (mid) await deleteLater(env, chatId, mid, dlDelMs(env));
+  if (phMid) { await tg(env, "deleteMessage", { chat_id: chatId, message_id: phMid }); }
+}
 // ===== /yts — YouTube search (v2.68.8) =====
 // innertube youtubei/v1/search (WEB client, keyless) = JALAN dari CF egress (probe 22 Okt: 200 + 18-19 videoRenderer, metadata lengkap) — 1 call udah bawa durasi/views/published, gak perlu RYD/oEmbed di sini
 const parseViews = s => { const m = String(s || "").match(/([\d.,]+)\s*([KMB])?\s*view/i); if (!m) return 0; const n = parseFloat(String(m[1]).replace(/,/g, "")); if (!isFinite(n)) return 0; return Math.round(n * ({ K: 1e3, M: 1e6, B: 1e9 }[m[2] || ""] || 1)); };
@@ -1178,13 +1357,16 @@ export async function nhStatGet(env, ms) {
 // Watchdog: a builder job that never got its callback (runner died / queued forever) is closed,
 // the chat is told, and the busy key is released. Jobs live in D1 (kv table) so the scan is SQL;
 // env.KV.list is the fallback for dev/test.
+// v2.78.1: resolves (`ytr:`) are swept the same way. A resolve record outlives its invocation when
+// Cloudflare kills the isolate mid-chain, and that is exactly how a placeholder used to stay forever.
 export async function nhWatchdog(env) {
   let n = 0;
   n += await jobSweep(env, NH_JOB_PREFIX, job => NH_BUSY_PREFIX + job.chat + ":" + job.id + ":" + job.fmt, false);
-  n += await jobSweep(env, YT_JOB_PREFIX, job => YT_BUSY_PREFIX + job.chat + ":" + (ytIdOf(job.u) || job.u) + ":" + job.kind, true);
+  n += await jobSweep(env, YT_JOB_PREFIX, job => YT_BUSY_PREFIX + job.chat + ":" + (ytIdOf(job.u) || job.u) + ":" + job.kind, "yt");
+  n += await jobSweep(env, YT_RESOLVE_PREFIX, job => YT_BUSY_PREFIX + job.chat + ":" + job.vid + ":" + job.kind, "resolve");
   return n;
 }
-async function jobSweep(env, prefix, busyOf, isYt) {
+async function jobSweep(env, prefix, busyOf, kind) {
   const now = Date.now();
   const rows = [];
   try {
@@ -1202,11 +1384,18 @@ async function jobSweep(env, prefix, busyOf, isYt) {
     let job = null;
     try { job = JSON.parse(r.val); } catch (_) { continue; }
     if (!job || !job.chat || !job.ts) continue;
-    if (now - Number(job.ts) < NH_DEAD_MS) continue;
+    if (now - Number(job.ts) < (kind === "resolve" ? YT_RESOLVE_DEAD_MS : NH_DEAD_MS)) continue;
     try { await env.KV.delete(r.key); } catch (_) {}
     try { await env.KV.delete(busyOf(job)); } catch (_) {}
     const L = await uiLang(env);
-    const txt = isYt ? L.ytDead : L.nhDead;
+    // A dead "send to chat" pull left the chat with a wait message and no buttons at all. Put the
+    // card back instead of explaining a file that will never arrive.
+    if (kind === "resolve" && job.via === "up" && job.u) {
+      try { await ytLinkCard(env, job.chat, L, job.mid, job.u, job.kind || "360", job.t || "", job.sz || 0, { fmt: job.f || "" }, job.tok, L.ytUpFail); } catch (_) {}
+      n++;
+      continue;
+    }
+    const txt = kind === "resolve" ? L.ytStuck : kind === "yt" ? L.ytDead : L.nhDead;
     let told = false;
     if (job.mid) {
       try {
@@ -1215,7 +1404,7 @@ async function jobSweep(env, prefix, busyOf, isYt) {
       } catch (_) { told = false; }
     }
     if (!told) { try { await reply(env, job.chat, txt); } catch (_) {} }
-    if (!isYt) { try { await nhStatInc(env, "timeout"); } catch (_) {} }
+    if (kind !== "yt" && kind !== "resolve") { try { await nhStatInc(env, "timeout"); } catch (_) {} }
     n++;
   }
   return n;
@@ -1473,9 +1662,15 @@ async function pbQualities(env, url) {
   try { c = await getJSON(env, "yt_q:" + vid, null); } catch (_) { c = null; }
   if (c && Array.isArray(c.q) && c.ts && Date.now() - Number(c.ts) < 6 * 60 * 60 * 1000) return { q: c.q, gated: !!c.gated };
   const r = await pbYtEx(env, url, "1080");
-  const q = r.ok && Array.isArray(r.q) ? r.q.map(x => ({ h: String(x.quality || "").replace(/p$/, ""), sz: Number(x.size) || 0 })).filter(x => /^\d{3,4}$/.test(x.h)) : [];
+  let q = r.ok && Array.isArray(r.q) ? r.q.map(x => ({ h: String(x.quality || "").replace(/p$/, ""), sz: Number(x.size) || 0 })).filter(x => /^\d{3,4}$/.test(x.h)) : [];
   // A gated clip is a property of the video, so remembering it is safe and saves a doomed resolve.
   const gated = !r.ok && pbGated(r.err);
+  // Gated (or every rung refused): nexray still reads the clip, and its muxed 360p is a real file.
+  // One honest button beats an empty menu that only says "the resolver can't read this".
+  if (!q.length) {
+    const a = await nxAio(env, url);
+    if (a.u) q = [{ h: "360", sz: a.sz }];
+  }
   if (q.length || gated) { try { await putJSON(env, "yt_q:" + vid, { q, gated, ts: Date.now() }, env.DB ? { ttlMs: 6 * 60 * 60 * 1000 } : undefined); } catch (_) {} }
   return { q, gated };
 }
@@ -1605,17 +1800,23 @@ const pbGated = err => /could not be read|private|region|deleted|unavailable|not
 
 // btch (btch-downloader-api-green.vercel.app) is the fast source: its proxy pushed 41 MB in
 // 1.4 s when measured, and it hands out both mp4 and mp3. No quality ladder — one file per kind.
-async function btchYt(env, url, kind) {
+// Metadata helpers pass their own timeout; the chain above already capped what is left.
+async function btchYt(env, url, kind, tmo) {
   // Canonical watch URL: the short form silently drops the mp3 field on some clips.
   const id = ytIdOf(url);
   const target = id ? "https://www.youtube.com/watch?v=" + id : url;
   const api = String(env.BTCH_BASE || BTCH_BASE).replace(/\/+$/, "") + "/api/download/youtube?url=" + encodeURIComponent(target) + (kind === "mp3" ? "&type=audio" : "");
-  // Vercel answers 502/504 in bursts while the function warms up; back-to-back retries land in the
-  // same bad window, so leave a gap between them.
-  for (let i = 0; i < 3; i++) {
-    if (i) await sleep(2500);
+  // The caller's wall-clock budget decides how many tries fit: three 12 s attempts only make sense
+  // when there is time for them. A healthy btch answers in 1–3 s, so the caps below are generous.
+  const total = Math.min(tmo || 45000, 45000);
+  if (total <= 2000) return null; // out of budget: a doomed request only burns what is left
+  const gap = 2000;
+  const tries = total >= 14000 ? 3 : total >= 7000 ? 2 : 1;
+  const per = Math.min(12000, Math.max(2500, Math.floor((total - (tries - 1) * gap) / tries)));
+  for (let i = 0; i < tries; i++) {
+    if (i) await sleep(gap);
     try {
-      const r = await fetch(api, { headers: { "user-agent": UA }, signal: AbortSignal.timeout(45000) });
+      const r = await fetch(api, { headers: { "user-agent": UA }, signal: AbortSignal.timeout(per) });
       const j = await r.json().catch(() => null);
       if (env.__probe) env.__probe.push({ mid: null, method: "btch", chat: 0, text: r.status + " " + String(JSON.stringify(j || {})).slice(0, 120) });
       const res = j && j.result ? j.result : null;
@@ -1623,7 +1824,7 @@ async function btchYt(env, url, kind) {
       if (/^https:\/\/\S+$/.test(u)) {
         let sz = 0;
         try {
-          const h = await fetch(u, { headers: { "user-agent": UA, range: "bytes=0-0" }, signal: AbortSignal.timeout(15000) });
+          const h = await fetch(u, { headers: { "user-agent": UA, range: "bytes=0-0" }, signal: AbortSignal.timeout(Math.min(15000, per)) });
           const cr = h.headers.get("content-range") || "";
           sz = Number(cr.split("/")[1]) || Number(h.headers.get("content-length")) || 0;
         } catch (_) {}
@@ -1633,7 +1834,7 @@ async function btchYt(env, url, kind) {
   }
   return null;
 }
-const btchAudio = (env, url) => btchYt(env, url, "mp3");
+const btchAudio = (env, url, tmo) => btchYt(env, url, "mp3", tmo);
 
 // Nexray's ytmp3 is the one audio source that survives: it answers with a link to a public proxy
 // (beta.123tokyo.xyz) that serves a real MP3 to any caller, unlike every video route we have seen
@@ -1690,16 +1891,117 @@ async function nxTtResolve(env, url) {
   return { items: items.slice(0, DL_MAX_LINKS), meta: { title: String(r.title || "").slice(0, 180), author: String(a.nickname || a.fullname || "").slice(0, 60) } };
 }
 
+// v2.78.0: nexray /downloader/aio is the only YouTube source left that still answers for a gated
+// clip (ytdownloader.tech 422s every rung, and that empty menu is a dead end). Of its 12-21 entries
+// exactly one is playable without muxing: itag 18, a progressive 360p carrying avc1 + mp4a in the
+// same file (verified by atom scan, 11.8 MB). 136/137 are DASH video-only, so the Worker cannot use
+// them — and the URLs are signed to the resolving address, which is why the tail is probed here and
+// never trusted just because the JSON looked fine.
+async function nxAio(env, url) {
+  const vid = ytIdOf(url) || String(url);
+  let c = null;
+  try { c = await getJSON(env, YT_AIO_PREFIX + vid, null); } catch (_) { c = null; }
+  if (c && c.ts && Date.now() - Number(c.ts) < 6 * 60 * 60 * 1000) return { u: c.u || "", sz: Number(c.sz) || 0, rungs: Array.isArray(c.rungs) ? c.rungs : [], t: c.t || "" };
+  const j = await nxGet(env, "/downloader/aio?url=" + encodeURIComponent(url), 40000);
+  const r = j && j.status && j.result ? j.result : null;
+  const medias = r && Array.isArray(r.medias) ? r.medias : [];
+  let u = "";
+  const rungs = [];
+  for (const m of medias) {
+    const mu = String((m && m.url) || "");
+    const it = (mu.match(/[?&]itag=(\d+)/) || [])[1] || "";
+    const h = (String((m && m.quality) || "").match(/(\d{3,4})p/) || [])[1] || "";
+    // two entries are labelled "mp4 360p" (itag 18 progressive vs itag 134 video-only) — the
+    // itag in the URL is the only thing that tells them apart
+    if (h && String((m && m.ext) || "") === "mp4") rungs.push(h);
+    if (it === "18" && !u) u = mu;
+  }
+  let sz = 0;
+  if (u) {
+    const pr = await dlProbe(env, u);
+    if (pr.st >= 400 || !ytMediaCt(pr.ct)) u = ""; else sz = pr.sz;
+  }
+  const out = { u, sz, rungs, t: String((r && r.title) || "").slice(0, 110) };
+  if (u || rungs.length) { try { await putJSON(env, YT_AIO_PREFIX + vid, Object.assign({ ts: Date.now() }, out), env.DB ? { ttlMs: 6 * 60 * 60 * 1000 } : undefined); } catch (_) {} }
+  return out;
+}
+
+// v2.78.0: api.vxtwitter.com is the same fixupx family as fxtwitter with a flatter schema
+// (mediaURLs[] + media_extended[]). Probed from CF egress: 200, 1.4 KB — a cheap second opinion
+// for the days fxtwitter is slow or answers an empty tweet object.
+async function vxResolve(user, id) {
+  const j = await getJSONh("https://api.vxtwitter.com/" + encodeURIComponent(user) + "/status/" + id, 15000);
+  if (!j) return null;
+  const ext = Array.isArray(j.media_extended) ? j.media_extended : [];
+  const urls = Array.isArray(j.mediaURLs) ? j.mediaURLs.map(u => String(u || "")).filter(dlUrlOk) : [];
+  const items = urls.map((u, i) => ({ kind: /\.mp4(?:[?#]|$)/i.test(u) || (ext[i] && ext[i].type === "video") ? "video" : "photo", url: u }));
+  if (!items.length) return null;
+  return { items: items.slice(0, DL_MAX_LINKS), meta: { caption: String(j.text || ""), author: String(j.user_name || "") } };
+}
+
+// v2.78.0: sparky (keyless Koyeb instance, 20/20 burst + 20/20 sequential in the Nov sweep).
+// Only the video is taken: its audio field is a tiktokcdn mp4 container, and a "video/mp4" blob
+// sent through sendAudio is a coin flip at Telegram. nexray already supplies real audio.
+async function spTtResolve(env, url) {
+  const base = String(env.SPARKY_BASE || SPARKY_BASE).replace(/\/+$/, "");
+  const j = await getJSONh(base + "/api/downloader/tiktok?url=" + encodeURIComponent(url), 25000);
+  const d = j && j.status && j.data ? j.data : null;
+  if (!d || !dlUrlOk(d.video)) return null;
+  const a = d.author || {};
+  return { items: [{ kind: "video", url: String(d.video) }], meta: { title: String(d.title || "").slice(0, 180), author: String(a.nickname || a.unique_id || "").slice(0, 60) } };
+}
+
+// v2.78.0: nexray IG. The only route that still returns a FULL carousel (8/8 items on the probe
+// post). Its media URLs sit behind d.rapidcdn.app, an octet-stream proxy Telegram refuses — the
+// JWT in ?token= carries the real scontent URL, so unwrap it the same way btch items are.
+async function nxIgResolve(env, url) {
+  const j = await nxGet(env, "/downloader/instagram?url=" + encodeURIComponent(url), 30000);
+  const arr = j && j.status && Array.isArray(j.result) ? j.result : [];
+  const items = arr.map(x => ({ kind: x && x.type === "video" ? "video" : "photo", url: String((x && x.url) || "") })).filter(x => dlUrlOk(x.url));
+  for (const it of items) { const src = btchTokenUrl(it.url); if (src) it.url = src; }
+  const n = items.length;
+  if (!n) return null;
+  return { items: items.slice(0, DL_MAX_LINKS).map((it, i) => (n > 1 ? Object.assign({}, it, { pos: i + 1, total: n }) : it)) };
+}
+
+// v2.78.0: Facebook. fbcdn answers our Range probe with 206 + video/mp4 + avc1/mp4a, and both
+// resolvers hand out the same object, so the chain is two hosts deep without extra work. HD goes
+// first; SD is the smaller sibling when the HD file is too big for one isolate.
+async function nxFbResolve(env, url) {
+  const j = await nxGet(env, "/downloader/facebook?url=" + encodeURIComponent(url), 30000);
+  const r = j && j.status && j.result ? j.result : null;
+  if (!r) return null;
+  const items = [];
+  if (dlUrlOk(r.video_hd)) items.push({ kind: "video", fmt: "HD", url: String(r.video_hd) });
+  if (dlUrlOk(r.video_sd)) items.push({ kind: "video", fmt: "SD", url: String(r.video_sd) });
+  if (!items.length) return null;
+  return { items: items.slice(0, DL_MAX_LINKS), meta: { title: String(r.title || "").slice(0, 180) } };
+}
+async function spFbResolve(env, url) {
+  const base = String(env.SPARKY_BASE || SPARKY_BASE).replace(/\/+$/, "");
+  const j = await getJSONh(base + "/api/downloader/fbdl?url=" + encodeURIComponent(url), 25000);
+  const d = j && j.status && j.data ? j.data : null;
+  if (!d) return null;
+  const items = [];
+  if (dlUrlOk(d.high)) items.push({ kind: "video", fmt: "HD", url: String(d.high) });
+  if (dlUrlOk(d.low)) items.push({ kind: "video", fmt: "SD", url: String(d.low) });
+  if (!items.length) return null;
+  return { items: items.slice(0, DL_MAX_LINKS), meta: { title: String(d.title || "").slice(0, 180) } };
+}
+
 // Resolver bytes → Telegram. 40 MB is our own ceiling (one isolate holds the blob); past that the
 // link is the honest answer, because Telegram cannot fetch these hosts itself.
-async function ytPull(env, chatId, url, tmo) {
-  // The file endpoints are rate limited and answer 403/5xx in bursts; a single try turns that into
-  // a dead end. Three attempts a moment apart is what the provider actually tolerates.
-  for (let i = 0; i < 3; i++) {
+async function ytPull(env, chatId, url, ms) {
+  // The file endpoints are rate limited and answer 403/5xx in bursts, and a 200 whose body stalls
+  // costs the whole attempt. So: a bounded attempt (12 s is plenty for a host that answered in 0.3 s
+  // when it was measured), and a second try only when the budget can afford one.
+  const per = Math.max(2000, Math.min(ms || 12000, 12000));
+  const tries = (ms || 0) >= 26000 ? 2 : 1;
+  for (let i = 0; i < tries; i++) {
     if (i) await sleep(1500);
     let f = null;
     try {
-      const r = await fetch(url, { headers: { "user-agent": UA }, signal: AbortSignal.timeout(tmo || 90000) });
+      const r = await fetch(url, { headers: { "user-agent": UA }, signal: AbortSignal.timeout(per) });
       const ct = (r.headers.get("content-type") || "").split(";")[0].trim().toLowerCase();
       if (env.__probe) env.__probe.push({ mid: null, method: "ytfetch", chat: chatId, text: r.status + " " + ct + " " + (r.headers.get("content-length") || "?") });
       if (r.ok && r.body) {
@@ -1798,30 +2100,42 @@ export async function handleYtUpload(env, cbId, chatId, mid, tok) {
   if (!e || !e.u) { await tg(env, "answerCallbackQuery", { callback_query_id: cbId, text: L.dlExpired }); return; }
   await tg(env, "answerCallbackQuery", { callback_query_id: cbId, text: L.ytUpPop });
   if (mid) { try { await tg(env, "editMessageText", { chat_id: chatId, message_id: mid, text: L.ytUpWait, parse_mode: "HTML" }); } catch (_) {} }
-  const ok = await ytUploadResolved(env, chatId, L, mid, e.u, e.k || "360", e.t || "", e.f || "");
+  // Same trap as the resolve chain: the message above replaced a card that carried the only retry
+  // buttons, so a chain that never comes back leaves the chat with nothing. Budget it, and leave a
+  // record the watchdog turns back into a card if the invocation dies anyway.
+  const recKey = YT_RESOLVE_PREFIX + rndTok();
+  const b = ytBudget(env);
+  const inBudget = () => b.left() > 6000;
+  try { await putJSON(env, recKey, { chat: chatId, mid: mid || 0, kind: e.k || "360", vid: ytIdOf(e.y) || String(e.y || ""), ts: Date.now(), via: "up", u: e.u, t: e.t || "", f: e.f || "", sz: e.sz || 0, tok }, env.DB ? { ttlMs: 10 * 60 * 1000 } : undefined); } catch (_) {}
+  try {
+  const ok = await ytUploadResolved(env, chatId, L, mid, e.u, e.k || "360", e.t || "", e.f || "", b.slice(45000));
   if (ok) { try { await env.KV.delete(YT_UP_PREFIX + tok); } catch (_) {} return; }
   // The stored link is the stale one (resolver tokens expire in minutes): resolve again and retry
   // before telling anyone the pull failed.
   let ok2 = false;
-  if (e.y && e.k === "mp3") {
+  if (e.y && e.k === "mp3" && inBudget()) {
     // A stored MP3 link is a Nexray proxy link; minting a fresh one costs a single request.
     const nx = await nxMp3(env, e.y);
-    if (nx) ok2 = await ytUploadResolved(env, chatId, L, mid, nx.u, "mp3", e.t || nx.t || "", "MP3", 45000);
+    if (nx) ok2 = await ytUploadResolved(env, chatId, L, mid, nx.u, "mp3", e.t || nx.t || "", "MP3", b.slice(45000));
   }
   if (!ok2 && e.y) {
     // The requested rung may be the one the resolver cannot fetch right now; try the others too.
     const rungs = e.k === "mp3" ? ["144", "360", "240"] : [e.k || "360", "360", "144"].filter((v, i, a) => a.indexOf(v) === i);
     for (const rung of rungs) {
-      const fr = await pbYtEx(env, e.y, rung);
+      if (!inBudget()) break;
+      const fr = await pbYtEx(env, e.y, rung, 1, b.slice(30000));
       if (!fr.ok) continue;
-      if (e.k === "mp3") ok2 = await ytSendAsAudio(env, chatId, L, mid, fr.u, e.t || fr.t || "", fr.dur, "M4A", 30000);
-      else ok2 = await ytUploadResolved(env, chatId, L, mid, fr.u, e.k || "360", e.t || fr.t || "", fr.fmt, 30000);
+      if (e.k === "mp3") ok2 = await ytSendAsAudio(env, chatId, L, mid, fr.u, e.t || fr.t || "", fr.dur, "M4A", b.slice(30000));
+      else ok2 = await ytUploadResolved(env, chatId, L, mid, fr.u, e.k || "360", e.t || fr.t || "", fr.fmt, b.slice(30000));
       if (ok2) break;
     }
   }
   if (ok2) { try { await env.KV.delete(YT_UP_PREFIX + tok); } catch (_) {} return; }
   // Keep the buttons: telling someone to "use the link button" after deleting it is a dead end.
   await ytLinkCard(env, chatId, L, mid, e.u, e.k || "360", e.t || "", e.sz || 0, { fmt: e.f || "" }, tok, L.ytUpFail);
+  } finally {
+    try { await env.KV.delete(recKey); } catch (_) {}
+  }
 }
 
 // 720p / MP3 button: cache hit = instant, otherwise dispatch one builder job.
@@ -1860,18 +2174,31 @@ export async function handleYtBuild(env, cbId, chatId, mid, arg) {
   let wmid = mid || 0;
   if (wmid) await tg(env, "editMessageText", { chat_id: chatId, message_id: wmid, text: L.ytBuildWait(kind), parse_mode: "HTML" });
   else { const wj = await reply(env, chatId, L.ytBuildWait(kind)); wmid = (wj && wj.result && wj.result.message_id) || 0; }
+  // v2.78.1: everything below runs while the webhook is still open, and the handler stops waiting at
+  // 55 s (RESP_DEADLINE_MS). So the chain gets one wall-clock budget, and a record the watchdog can
+  // close for the case the budget cannot cover: an invocation that dies anyway (CPU kill, isolate
+  // recycle). Without both, the placeholder above is the last thing the chat ever sees — the
+  // "fetching BTCH…" that never lands.
+  const recKey = YT_RESOLVE_PREFIX + rndTok();
+  const b = ytBudget(env);
+  const inBudget = () => b.left() > 6000;
+  try { await putJSON(env, recKey, { chat: chatId, mid: wmid, kind, vid, ts: Date.now() }, env.DB ? { ttlMs: 10 * 60 * 1000 } : undefined); } catch (_) {}
+  try { await putJSON(env, busyKey, { tok: recKey, kind }, env.DB ? { ttlMs: 10 * 60 * 1000 } : undefined); } catch (_) {}
+  try {
   // Primary path: resolve here (seconds), post the link instantly, no GitHub Actions.
   if (kind === "btch") {
     // Owner's second source. Its proxy 403s in a browser ("Access to api.vidsnap.app was denied")
     // and throttles for us, so it is upload-only: never hand out a link we know is dead.
-    const b = await btchYt(env, e.u, "video");
-    if (b && await ytUploadResolved(env, chatId, L, wmid, b.u, kind, b.t || e.t || "", "BTCH", 45000)) return;
+    const b1 = await btchYt(env, e.u, "video", b.slice(45000));
+    if (b1 && await ytUploadResolved(env, chatId, L, wmid, b1.u, kind, b1.t || e.t || "", "BTCH", b.slice(45000))) return;
     // btch refuses some clips outright (502 on every retry). The resolver still reads them, so fall
     // back to its 360p rung instead of ending at a build card.
-    const pv = await pbYtEx(env, e.u, "360");
-    if (pv.ok && await ytUploadResolved(env, chatId, L, wmid, pv.u, "360", pv.t || e.t || "", pv.fmt, 45000)) return;
+    if (inBudget()) {
+      const pv = await pbYtEx(env, e.u, "360", 2, b.slice(30000));
+      if (pv.ok && await ytUploadResolved(env, chatId, L, wmid, pv.u, "360", pv.t || e.t || "", pv.fmt, b.slice(45000))) return;
+    }
   }
-  const pbx = kind === "mp3" || kind === "btch" ? { ok: false, err: "" } : await pbYtEx(env, e.u, kind);
+  const pbx = !inBudget() || kind === "mp3" || kind === "btch" ? { ok: false, err: "" } : await pbYtEx(env, e.u, kind, 2, b.slice(30000));
   const pb = pbx.ok ? pbx : null;
   if (pb) {
     await ytCachePut(env, vid, kind, { u: pb.u, host: "puruboy", t: pb.t || e.t || "", sz: pb.sz, fmt: pb.fmt, exp: "" });
@@ -1882,27 +2209,31 @@ export async function handleYtBuild(env, cbId, chatId, mid, arg) {
   }
   // The rung the owner asked for is gone. btch reads plenty of what ytdownloader.tech refuses, so
   // try it once — a 360p file beats a dead end — before offering a GitHub build.
-  if (!pb && kind !== "btch" && kind !== "mp3") {
-    const b = await btchYt(env, e.u, "video");
-    if (b && await ytUploadResolved(env, chatId, L, wmid, b.u, kind, b.t || e.t || "", "BTCH", 45000)) return;
+  if (!pb && inBudget() && kind !== "btch" && kind !== "mp3") {
+    // v2.78.0: nexray's progressive 360p — the only source measured to answer for gated clips.
+    const a = await ytWithin(b.slice(25000), () => nxAio(env, e.u), null);
+    if (a && a.u && await ytUploadResolved(env, chatId, L, wmid, a.u, "360", a.t || e.t || "", "360p", b.slice(45000))) return;
+    const b2 = await btchYt(env, e.u, "video", b.slice(30000));
+    if (b2 && await ytUploadResolved(env, chatId, L, wmid, b2.u, kind, b2.t || e.t || "", "BTCH", b.slice(45000))) return;
   }
-  if (kind === "mp3") {
+  if (kind === "mp3" && inBudget()) {
     // Nexray first: it is the only provider that returns an actual MP3 file. Everything below it is
     // the older chain (btch audio, then a muxed mp4 re-sent as .m4a) and stays as fallback.
     const nx = await nxMp3(env, e.u);
-    if (nx && await ytUploadResolved(env, chatId, L, wmid, nx.u, "mp3", nx.t || e.t || "", "MP3", 45000)) return;
+    if (nx && await ytUploadResolved(env, chatId, L, wmid, nx.u, "mp3", nx.t || e.t || "", "MP3", b.slice(45000))) return;
     // Audio: every provider proxy either stalls (~300 KB) or 403s, so try the bytes once and fall
     // through to the confirmed GitHub build instead of handing over a dead link.
-    const a = await btchAudio(env, e.u);
-    if (a && await ytUploadResolved(env, chatId, L, wmid, a.u, "mp3", a.t || e.t || "", "MP3", 30000)) return;
+    const a = await btchAudio(env, e.u, b.slice(25000));
+    if (a && await ytUploadResolved(env, chatId, L, wmid, a.u, "mp3", a.t || e.t || "", "MP3", b.slice(30000))) return;
     // No audio-only source is alive, but the muxed mp4 carries the audio track — send that as audio.
     // Rungs fail independently at the resolver ("pick another format"), so walk a short ladder.
     let last = null;
     for (const rung of ["144", "360", "240"]) {
-      const pv = await pbYtEx(env, e.u, rung);
+      if (!inBudget()) break;
+      const pv = await pbYtEx(env, e.u, rung, 1, b.slice(25000));
       if (!pv.ok) continue;
       last = pv;
-      if (await ytSendAsAudio(env, chatId, L, wmid, pv.u, pv.t || e.t || "", pv.dur, "M4A", 30000)) return;
+      if (await ytSendAsAudio(env, chatId, L, wmid, pv.u, pv.t || e.t || "", pv.dur, "M4A", b.slice(30000))) return;
     }
     // The bytes refused us (the file endpoints rate limit in bursts). The link still opens in a
     // browser and plays the audio, so hand that over instead of a build card that would need the
@@ -1913,6 +2244,13 @@ export async function handleYtBuild(env, cbId, chatId, mid, arg) {
       if (await ytLinkCard(env, chatId, L, wmid, last.u, "mp3", last.t || e.t || "", last.sz || 0, { fmt: "M4A" }, upTok)) return;
     }
   }
+  // The budget ran out mid-chain: the sources above are slow, not dead, and asking for a GitHub
+  // build would be a lie. Say what actually happened and let the next tap start a fresh budget.
+  if (!inBudget()) {
+    if (wmid) await tg(env, "editMessageText", { chat_id: chatId, message_id: wmid, text: L.ytStuck, parse_mode: "HTML" });
+    else await reply(env, chatId, L.ytStuck);
+    return;
+  }
   // Resolver is out: ask before spending a GitHub Actions run — never dispatch on our own.
   const gtok = rndTok();
   try { await putJSON(env, YT_BUILD_PREFIX + gtok, { c: chatId, u: e.u, t: String(e.t || "").slice(0, 120), exp: Date.now() + DL_SAV_TTL_MS }, env.DB ? { ttlMs: DL_SAV_TTL_MS } : undefined); } catch (_) {}
@@ -1920,6 +2258,13 @@ export async function handleYtBuild(env, cbId, chatId, mid, arg) {
   const kb = { inline_keyboard: [[{ text: L.ytGhaBtn, callback_data: "ytg:" + kind + ":" + gtok }]] };
   if (wmid) await tg(env, "editMessageText", { chat_id: chatId, message_id: wmid, text: ask, parse_mode: "HTML", reply_markup: kb });
   else await tg(env, "sendMessage", { chat_id: chatId, text: ask, parse_mode: "HTML", reply_markup: kb });
+  } finally {
+    // The record must not outlive the chain: the watchdog only exists for the case where this line
+    // never runs because Cloudflare killed the isolate.
+    try { await env.KV.delete(recKey); } catch (_) {}
+    try { await env.KV.delete(busyKey); } catch (_) {}
+  }
+  return;
 }
 
 // Confirmed GitHub Actions build — the last resort, and only after the owner taps the button.
