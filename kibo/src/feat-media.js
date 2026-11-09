@@ -1574,7 +1574,9 @@ const YT_CAP_MB = { "144": 60, "240": 80, "360": 120, "480": 200, "720": 300, "1
 // distinction to say something true, so the reason rides along instead of collapsing into null.
 async function pbYtEx(env, url, kind, tries, tmo) {
   const q = kind === "mp3" ? "type=audio" : "quality=" + kind;
-  const api = String(env.PURUBOY_BASE || PURUBOY_BASE).replace(/\/+$/, "") + "/api/downloader/youtube?url=" + encodeURIComponent(url) + "&" + q;
+  // The resolver caches the file token per (video, rung) and keeps serving it after it expires,
+  // so a plain call can hand us a dead link. A unique param forces a freshly minted token.
+  const api = String(env.PURUBOY_BASE || PURUBOY_BASE).replace(/\/+$/, "") + "/api/downloader/youtube?url=" + encodeURIComponent(url) + "&" + q + "&_=" + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
   let err = "";
   for (let i = 0; i < (tries || 2); i++) {
     try {
@@ -1634,26 +1636,32 @@ const btchAudio = (env, url) => btchYt(env, url, "mp3");
 // Resolver bytes → Telegram. 40 MB is our own ceiling (one isolate holds the blob); past that the
 // link is the honest answer, because Telegram cannot fetch these hosts itself.
 async function ytPull(env, chatId, url, tmo) {
-  let f = null;
-  try {
-    const r = await fetch(url, { headers: { "user-agent": UA }, signal: AbortSignal.timeout(tmo || 90000) });
-    const ct = (r.headers.get("content-type") || "").split(";")[0].trim().toLowerCase();
-    if (env.__probe) env.__probe.push({ mid: null, method: "ytfetch", chat: chatId, text: r.status + " " + ct + " " + (r.headers.get("content-length") || "?") });
-    if (r.ok && r.body) {
-      const rd = r.body.getReader();
-      const chunks = [];
-      let got = 0;
-      for (;;) {
-        const cr = await rd.read();
-        if (cr.done) break;
-        got += cr.value.length;
-        if (got > YT_UPLOAD_MAX) { try { await rd.cancel(); } catch (_) {} got = -1; break; }
-        chunks.push(cr.value);
+  // The file endpoints are rate limited and answer 403/5xx in bursts; a single try turns that into
+  // a dead end. Three attempts a moment apart is what the provider actually tolerates.
+  for (let i = 0; i < 3; i++) {
+    if (i) await sleep(1500);
+    let f = null;
+    try {
+      const r = await fetch(url, { headers: { "user-agent": UA }, signal: AbortSignal.timeout(tmo || 90000) });
+      const ct = (r.headers.get("content-type") || "").split(";")[0].trim().toLowerCase();
+      if (env.__probe) env.__probe.push({ mid: null, method: "ytfetch", chat: chatId, text: r.status + " " + ct + " " + (r.headers.get("content-length") || "?") });
+      if (r.ok && r.body) {
+        const rd = r.body.getReader();
+        const chunks = [];
+        let got = 0;
+        for (;;) {
+          const cr = await rd.read();
+          if (cr.done) break;
+          got += cr.value.length;
+          if (got > YT_UPLOAD_MAX) { try { await rd.cancel(); } catch (_) {} got = -1; break; }
+          chunks.push(cr.value);
+        }
+        if (got > 0) f = { chunks, size: got };
       }
-      if (got > 0) f = { chunks, size: got };
-    }
-  } catch (e) { if (env.__probe) env.__probe.push({ mid: null, method: "ytfetch", chat: chatId, text: "ERR " + String((e && e.message) || e).slice(0, 80) }); }
-  return f;
+    } catch (e) { if (env.__probe) env.__probe.push({ mid: null, method: "ytfetch", chat: chatId, text: "ERR " + String((e && e.message) || e).slice(0, 80) }); }
+    if (f) return f;
+  }
+  return null;
 }
 
 async function ytUploadResolved(env, chatId, L, mid, url, kind, title, fmt, tmo) {
@@ -1735,6 +1743,19 @@ export async function handleYtUpload(env, cbId, chatId, mid, tok) {
   if (mid) { try { await tg(env, "editMessageText", { chat_id: chatId, message_id: mid, text: L.ytUpWait, parse_mode: "HTML" }); } catch (_) {} }
   const ok = await ytUploadResolved(env, chatId, L, mid, e.u, e.k || "360", e.t || "", e.f || "");
   if (ok) { try { await env.KV.delete(YT_UP_PREFIX + tok); } catch (_) {} return; }
+  // The stored link is the stale one (resolver tokens expire in minutes): resolve again and retry
+  // before telling anyone the pull failed.
+  let ok2 = false;
+  if (e.y) {
+    if (e.k === "mp3") {
+      const fr = await pbYtEx(env, e.y, "144");
+      if (fr.ok) ok2 = await ytSendAsAudio(env, chatId, L, mid, fr.u, e.t || fr.t || "", fr.dur, "M4A", 45000);
+    } else {
+      const fr = await pbYtEx(env, e.y, e.k || "360");
+      if (fr.ok) ok2 = await ytUploadResolved(env, chatId, L, mid, fr.u, e.k || "360", e.t || fr.t || "", fr.fmt, 45000);
+    }
+  }
+  if (ok2) { try { await env.KV.delete(YT_UP_PREFIX + tok); } catch (_) {} return; }
   // Keep the buttons: telling someone to "use the link button" after deleting it is a dead end.
   await ytLinkCard(env, chatId, L, mid, e.u, e.k || "360", e.t || "", e.sz || 0, { fmt: e.f || "" }, tok, L.ytUpFail);
 }
@@ -1763,7 +1784,7 @@ export async function handleYtBuild(env, cbId, chatId, mid, arg) {
     if (/^puruboy/.test(String(hit.host || "")) || /ytdownloader\.tech/.test(String(hit.u || ""))) {
       // Telegram cannot fetch these hosts — same card + "send to chat" as the first time
       const upTok = rndTok();
-      try { await putJSON(env, YT_UP_PREFIX + upTok, { c: chatId, u: hit.u, k: kind, t: hit.t || e.t || "", f: hit.fmt || "", sz: hit.sz || 0, exp: Date.now() + DL_SAV_TTL_MS }, env.DB ? { ttlMs: DL_SAV_TTL_MS } : undefined); } catch (_) {}
+      try { await putJSON(env, YT_UP_PREFIX + upTok, { c: chatId, u: hit.u, y: e.u, k: kind, t: hit.t || e.t || "", f: hit.fmt || "", sz: hit.sz || 0, exp: Date.now() + DL_SAV_TTL_MS }, env.DB ? { ttlMs: DL_SAV_TTL_MS } : undefined); } catch (_) {}
       const card = await ytLinkCard(env, chatId, L, mid, hit.u, kind, hit.t || e.t || "", hit.sz || 0, { fmt: hit.fmt }, upTok);
       if (card) return;
     }
@@ -1791,7 +1812,7 @@ export async function handleYtBuild(env, cbId, chatId, mid, arg) {
   if (pb) {
     await ytCachePut(env, vid, kind, { u: pb.u, host: "puruboy", t: pb.t || e.t || "", sz: pb.sz, fmt: pb.fmt, exp: "" });
     const upTok = rndTok();
-    try { await putJSON(env, YT_UP_PREFIX + upTok, { c: chatId, u: pb.u, k: kind, t: pb.t || e.t || "", f: pb.fmt, sz: pb.sz || 0, exp: Date.now() + DL_SAV_TTL_MS }, env.DB ? { ttlMs: DL_SAV_TTL_MS } : undefined); } catch (_) {}
+    try { await putJSON(env, YT_UP_PREFIX + upTok, { c: chatId, u: pb.u, y: e.u, k: kind, t: pb.t || e.t || "", f: pb.fmt, sz: pb.sz || 0, exp: Date.now() + DL_SAV_TTL_MS }, env.DB ? { ttlMs: DL_SAV_TTL_MS } : undefined); } catch (_) {}
     const card = await ytLinkCard(env, chatId, L, wmid, pb.u, kind, pb.t || e.t || "", pb.sz || 0, { fmt: pb.fmt }, upTok);
     if (card) return;
   }
@@ -1809,6 +1830,14 @@ export async function handleYtBuild(env, cbId, chatId, mid, arg) {
     // No audio-only source is alive, but the muxed mp4 carries the audio track — send that as audio.
     const pv = await pbYtEx(env, e.u, "144");
     if (pv.ok && await ytSendAsAudio(env, chatId, L, wmid, pv.u, pv.t || e.t || "", pv.dur, "M4A", 45000)) return;
+    // The bytes refused us (the file endpoints rate limit in bursts). The link still opens in a
+    // browser and plays the audio, so hand that over instead of a build card that would need the
+    // very same bytes.
+    if (pv.ok) {
+      const upTok = rndTok();
+      try { await putJSON(env, YT_UP_PREFIX + upTok, { c: chatId, u: pv.u, y: e.u, k: "mp3", t: pv.t || e.t || "", f: "M4A", sz: pv.sz || 0, exp: Date.now() + DL_SAV_TTL_MS }, env.DB ? { ttlMs: DL_SAV_TTL_MS } : undefined); } catch (_) {}
+      if (await ytLinkCard(env, chatId, L, wmid, pv.u, "mp3", pv.t || e.t || "", pv.sz || 0, { fmt: "M4A" }, upTok)) return;
+    }
   }
   // Resolver is out: ask before spending a GitHub Actions run — never dispatch on our own.
   const gtok = rndTok();
