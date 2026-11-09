@@ -113,12 +113,8 @@ export async function onUpdErr(env, e) {
 
 export const ERRDM_TTL_S = 3600;
 
-// R-05: a handler that throws reaches the owner instead of dying in the CF console. Rate limited to
-// one message per hour per error site, so a failing loop cannot turn into a message storm.
 export async function errDm(env, e) {
   try {
-    // A Telegram delivery failure cannot be reported over Telegram, and reporting it would add a
-    // doomed send to an already-bounded retry path.
     if (e && e.__tg) return;
     const owner = Number(await env.KV.get("owner_chat")) || 0;
     if (!owner) return;

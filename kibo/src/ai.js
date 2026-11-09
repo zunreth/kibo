@@ -485,10 +485,7 @@ export function aiLoopHash(s) {
 }
 
 export async function aiFetchRetry(url, init, env) {
-  // R-01: callers are supposed to pass a signal, but a forgotten one must not hang the turn forever.
   const req = init && init.signal ? init : Object.assign({}, init, { signal: AbortSignal.timeout(80000) });
-  // R-08: the same request fired repeatedly in a short window is a bug (a retry storm, a double-fired
-  // /regenerate), not a conversation. Distinct prompts are never counted, and nothing is throttled.
   if (env && env.KV) {
     try {
       const h = aiLoopHash(url + "|" + String(req.body || ""));

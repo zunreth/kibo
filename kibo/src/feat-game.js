@@ -1015,8 +1015,6 @@ export async function gameIdleTick(env) {
       if (st.paused || !st.ts || now - st.ts <= GAME_IDLE_MS) continue;
       st.paused = 1;
       await putJSON(env, k + cid, st);
-      // pesan cuma buat state yang BARU aja idle (5-15 mnt); state basi berhari-hari (sisa sesi lama yang
-      // kepotong restart dll) = pause senyap — dulu dia nebus pesan "idle 5 menit" begitu user nyentuh games lagi
       if (now - st.ts <= GAME_IDLE_MS + 10 * 60 * 1000) await reply(env, cid, L.sfPause);
     }
     if (live) keep.push(cid);

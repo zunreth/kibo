@@ -1,20 +1,14 @@
-// feat-host.js — /host file hosting: reply/caption/forward + /host → menu provider → upload → link.
-// Provider: kappa.lol + femboy.beauty (JSON {link,delete}), pomf.lain.la + uguu.se + qu.ax (pomf shape), temp.sh (URL polos),
-// gofile.io (2-step: servers -> uploadfile -> downloadPage). CATBOX/litterbox keluar menu 25 Okt: WAF BunkerWeb blok upload (mati dari VPS DAN CF egress — 412 / 403 / "No file!"),
-// catbox permanent juga "Invalid uploader". Link catbox/litter tetap bisa di-fetch balik lewat hostLinkFind.
-// Cap realistis: download bot TG ≤ 20MB. Retensi ditulis di TEXT menu (nomor = tombol satu row, ala /yts), tombol doang.
 import { esc, tg, reply, scheduleDelete, tgFileBytes, getJSON, putJSON, tgErrLog } from "./base.js";
 import { dbgLog } from "./feat-debug.js";
 import { uiLang } from "./ui.js";
 import { UA } from "./consts.js";
 
-// timeout upstream /host — env-knob (pola upstreamTmo NF-251019-4; default = nilai lama, behavior gak berubah)
 const hostTmo = env => AbortSignal.timeout(parseInt((env && env.HOST_TIMEOUT_MS) || "", 10) || 60000);
 
 const TOK_PFX = "host_tok:";
-const LAST_PFX = "host_last:"; // media terakhir per chat — buat /host polos (forward + cmd)
-const TOK_TTL = 600000; // 10 menit — token menu basi setelah itu
-const MENU_DEL_MS = 300000; // menu (dan hasilnya) ilang sendiri 5 mnt — pola /dl
+const LAST_PFX = "host_last:";
+const TOK_TTL = 600000;
+const MENU_DEL_MS = 300000;
 
 const HOSTS = [
   { id: "kappa", short: "kappa", name: "kappa.lol", ret: "hostRetPerm", url: "https://kappa.lol/api/upload", field: "file", kind: "kappa" },
@@ -28,7 +22,7 @@ const HOSTS = [
 
 async function uploadTo(env, h, bytes, name, mime) {
   let url = h.url;
-  if (h.kind === "gofile") { // 2-step: minta server upload aktif dulu, terus POST ke sana
+  if (h.kind === "gofile") {
     const sr = await fetch("https://api.gofile.io/servers", { headers: { "user-agent": UA }, signal: hostTmo(env) });
     const sj = await sr.json().catch(() => null);
     const srv = sj && sj.status === "ok" && sj.data && sj.data.servers && sj.data.servers[0] && sj.data.servers[0].name;
@@ -46,7 +40,7 @@ async function uploadTo(env, h, bytes, name, mime) {
   if (h.kind === "kappa" && j && j.link) return { url: j.link, del: j.delete || null };
   if (h.kind === "gofile" && j && j.status === "ok" && j.data && j.data.downloadPage) return { url: j.data.downloadPage };
   if (h.kind === "pomf" && j && j.success && j.files && j.files[0] && j.files[0].url) return { url: j.files[0].url };
-  throw new Error(why); // jujur: bawa status + potongan respons buat pesan fail
+  throw new Error(why);
 }
 
 function ownFile(msg) {
@@ -57,7 +51,6 @@ function ownFile(msg) {
   if (msg.document) return { fid: msg.document.file_id, name: msg.document.file_name || "file.bin", mime: msg.document.mime_type || "application/octet-stream" };
   return null;
 }
-// sumber file: reply ke foto/document, atau foto dengan caption
 function pickFile(msg) {
   const rp = msg.reply_to_message || {};
   return ownFile(rp) || ownFile(msg);
@@ -65,7 +58,7 @@ function pickFile(msg) {
 
 async function hostMenu(env, chatId, f, L) {
   const tok = Math.random().toString(36).slice(2, 10);
-  await putJSON(env, TOK_PFX + tok, { fid: f.fid, name: f.name, mime: f.mime, ts: Date.now() }, env.DB ? { ttlMs: TOK_TTL } : undefined); // name/mime ikut — kalau gak, upload = "file.bin"
+  await putJSON(env, TOK_PFX + tok, { fid: f.fid, name: f.name, mime: f.mime, ts: Date.now() }, env.DB ? { ttlMs: TOK_TTL } : undefined);
   const list = HOSTS.map((h, i) => (i + 1) + ". " + h.name + " — " + L[h.ret]).join("\n");
   const rows = [HOSTS.map((h, j) => ({ text: String(j + 1), callback_data: "hostp:" + tok + ":" + h.id }))];
   rows.push([{ text: L.rstNo, callback_data: "hostcancel:" + tok }]);
@@ -79,7 +72,6 @@ async function hostLast(env, chatId) {
   return r && r.fid && Date.now() - (r.ts || 0) <= TOK_TTL ? r : null;
 }
 
-// catet media terakhir per chat (foto/document apapun, termasuk forward) — /host polos pake ini kalau gak nge-reply
 export async function hostTrack(env, chatId, msg) {
   const f = ownFile(msg);
   if (f) { try { await putJSON(env, LAST_PFX + chatId, { fid: f.fid, name: f.name, mime: f.mime, ts: Date.now() }, env.DB ? { ttlMs: TOK_TTL } : undefined); } catch (_) {} }
@@ -111,7 +103,7 @@ export async function handleHostCb(env, cbId, chatId, mid, arg) {
     if (mid) { try { await tg(env, "editMessageText", { chat_id: chatId, message_id: mid, text: L.hostGone, parse_mode: "HTML", reply_markup: { inline_keyboard: [] } }); } catch (_) {} }
     return;
   }
-  await env.KV.delete(TOK_PFX + tok); // one-shot
+  await env.KV.delete(TOK_PFX + tok);
   await tg(env, "answerCallbackQuery", { callback_query_id: cbId });
   if (mid) { try { await tg(env, "editMessageText", { chat_id: chatId, message_id: mid, text: L.hostUploading(esc(h.name)), parse_mode: "HTML" }); } catch (_) {} }
   await tg(env, "sendChatAction", { chat_id: chatId, action: "upload_document" });
@@ -139,9 +131,8 @@ export async function handleHostCancel(env, cbId, chatId, mid, tok) {
   if (mid) { try { await tg(env, "deleteMessage", { chat_id: chatId, message_id: mid }); } catch (_) {} }
 }
 
-// link provider polos di chat → bot fetch + kirim balik file-nya (request owner 25 Okt)
 const HOST_LINK_RE = /https?:\/\/[^\s<>"']*?(?:kappa\.lol|femboy\.beauty|lain\.la|uguu\.se|catbox\.moe)\/\S+/i;
-const HOST_FETCH_MAX = 20 * 1024 * 1024; // senada cap upload /host
+const HOST_FETCH_MAX = 20 * 1024 * 1024;
 const MIME_EXT = { "image/jpeg": ".jpg", "image/png": ".png", "image/gif": ".gif", "image/webp": ".webp", "video/mp4": ".mp4", "video/webm": ".webm", "application/zip": ".zip", "application/pdf": ".pdf", "audio/mpeg": ".mp3", "audio/ogg": ".ogg", "text/plain": ".txt" };
 
 export function hostLinkFind(text) {

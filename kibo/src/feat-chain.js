@@ -1,6 +1,3 @@
-// feat-chain — quest chains: arc 5 langkah nyambung cerita. Langkah nyala otomatis dari aktivitas
-// yang emang lo kerjain di bot (daily/side/photo quest) -> 1 step/hari. Tamat penuh = +1 shield
-// + bonus pts + celebration. GAK ada deadline/hangus (v2.68.14) — arc gak pernah mati sendiri.
 import { getJSON, putJSON, tg, reply, esc, notify } from './base.js';
 import { uiLang, UI_SEP } from './ui.js';
 import { addPts, questDay } from './feat-remind.js';
@@ -9,7 +6,6 @@ import { stripThink, langLine } from './ai.js';
 import { deleteLater } from './feat-media.js';
 import { CHAIN_KEY, CHAIN_STEP_PTS, CHAIN_BONUS, CHAIN_SHIELD, SHIELD_MAX, CHAIN_GEN_STALE_MS, UI_LANG_KEY, SYS_CHAIN, SYS_CHAT, LIVE_CTX } from './consts.js';
 
-// v2.68.14: hadiah pecah — tiap step +pts, tamat = +1 shield (cap SHIELD_MAX) + bonus pts
 async function grantChainShield(env) {
   try {
     const q = await getJSON(env, "quest", {});
@@ -37,8 +33,6 @@ export async function handleChain(env, msg, chatId) {
   return sendView(env, chatId, await chainView(env, chatId, L));
 }
 
-// gen INLINE di jalur callback (placeholder edit-in-place dulu, AI cap 50s < deadline respon 55s —
-// dulu over-syringe waitUntil: jendela pasca-respon ~30s < think AI = gen sering mati kering)
 export async function chainStartCb(env, chatId, mid, L) {
   const cur = await getJSON(env, CHAIN_KEY + chatId, null);
   if (cur && cur.state === "gen" && Date.now() - (cur.started || 0) < CHAIN_GEN_STALE_MS) return L.chainGenPop;
@@ -96,7 +90,6 @@ export async function chainViewCb(env, chatId, mid, L) {
   return "";
 }
 
-// dipanggil dari quest selesai (daily/side/photo) — 1 step/hari; komplit = shield + bonus + celebration
 export async function chainStep(env, chatId) {
   const key = CHAIN_KEY + chatId;
   const c = await getJSON(env, key, null);
@@ -130,8 +123,6 @@ async function celebrate(env, chatId, name) {
   if (t) await tg(env, "sendMessage", { chat_id: chatId, text: "\uD83C\uDF89 " + esc(t.slice(0, 300)), parse_mode: "HTML" });
 }
 
-// cron harian (lifeCron): v2.68.14 GAK ada ancaman mati lagi — arc gak pernah hangus sendiri.
-// Dipanggil biar kontrak import feat-life tetep kepenuhan; isinya no-op.
 export async function chainCron(env, nowSec) {
   return;
 }

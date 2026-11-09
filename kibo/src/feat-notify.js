@@ -1,5 +1,3 @@
-// feat-notify — Notify API: POST /notify dgn bearer token statis (secret NOTIFY_TOKEN)
-// → push PERMANEN ke owner chat. Notify-only (bukan request-bin): payload gak disimpen di mana pun.
 import { getJSON, putJSON, tg, esc } from './base.js';
 import { NOTIFY_DAY_KEY, NOTIFY_CAP } from './consts.js';
 import { dbgLog } from './feat-debug.js';

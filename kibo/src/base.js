@@ -76,10 +76,7 @@ export function mdTg(s) {
     .replace(/\*([^*\n]+?)\*/g, "<i>$1</i>");
 }
 
-// NF-251019-4: shared env-knobbed upstream timeout (user-facing interactive fetches)
 export const upstreamTmo = env => AbortSignal.timeout(parseInt((env && env.UPSTREAM_TIMEOUT_MS) || "", 10) || 15000);
-// R-01: a Telegram call that never answers must never be able to hang a handler. JSON methods are
-// fast; multipart uploads are legitimately slow, so they get their own (much longer) budget.
 export const tgTmo = env => AbortSignal.timeout(parseInt((env && env.TG_TIMEOUT_MS) || "", 10) || 20000);
 export const tgUpTmo = env => AbortSignal.timeout(parseInt((env && env.TG_UPLOAD_TIMEOUT_MS) || "", 10) || 240000);
 
@@ -105,9 +102,8 @@ export async function tg(env, method, payload) {
     j = await r.json().catch(() => null);
   } catch (e) {
     dbgLog(env, "tg", method + " THREW " + String((e && e.message) || e).slice(0, 120));
-    // Tagged so the error reporter does not try to deliver its own report over a dead channel.
     try { e.__tg = true; } catch (_) {}
-    throw e; // propagate ke caller persis kayak dulu
+    throw e;
   }
   if (!j || !j.ok) tgErrLog(env, method, j);
   if (j && j.ok && j.result && typeof j.result.message_id === "number") await trackNukeMsg(env, j.result.message_id);
@@ -115,8 +111,6 @@ export async function tg(env, method, payload) {
   return j;
 }
 
-// Probe helper: reduce an inline keyboard to [row][{text, data|url}] so /hook probe replies can be
-// asserted (callback flows have no other way to be exercised from outside).
 function probeKb(markup) {
   let m = markup;
   if (typeof m === "string") { try { m = JSON.parse(m); } catch (_) { return undefined; } }
@@ -124,7 +118,6 @@ function probeKb(markup) {
   return m.inline_keyboard.map(row => (row || []).map(b => (b && b.callback_data ? { t: b.text, d: b.callback_data } : { t: b && b.text, u: b && b.url })));
 }
 
-// B11: delivery fail TG = catet ke ring debug juga (keliatan di /debug log), bukan cuman console
 export function tgErrLog(env, method, j) {
   console.error("tg fail:", method, JSON.stringify((j && j.description) || "").slice(0, 200));
   dbgLog(env, "tg", method + " fail " + String((j && j.description) || (j ? "?" : "no-json")).slice(0, 140));
@@ -145,16 +138,13 @@ export async function notify(env, chatId, text) {
   if (mid) scheduleDelete(env, chatId, mid);
   return j;
 }
-// v2.71.0: format /nh — dipakai bareng /nh, link auto-detect, dan setting default
 export const NH_FMT_ALIAS = { album: "album", tl: "album", photo: "album", a: "album", zip: "zip", pdf: "pdf", scroll: "scroll" };
 export async function nhDefFmt(env) {
   let v = "";
   try { v = String((await env.KV.get(NH_DEF_KEY)) || "").trim().toLowerCase(); } catch (_) {}
   return NH_FMT_ALIAS[v] || "album";
 }
-// v2.72.0: provider upload builder — auto (x0.at → kappa) / x0at / kappa
 export const NH_HOSTS = ["auto", "x0at", "kappa"];
-// v2.73.0: preset kualitas PDF — normal = 1600px/q82 (default, perilaku lama), small = 1100px/q76 (buat yang mau file ringan)
 export const NH_PDFQS = ["normal", "small"];
 export async function nhPdfQ(env) {
   let v = "";

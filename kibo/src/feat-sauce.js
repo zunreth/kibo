@@ -1,14 +1,9 @@
-// feat-sauce.js — /sauce reverse image search: SauceNAO (API resmi, key gratis ~100/24h) + tombol Google Lens.
-// Jalur: foto caption /sauce ATAU reply /sauce ke foto → bytes → SauceNAO → top 3 + link.
-// Lens butuh URL publik: rehost ke litterbox (auto-expire 1 jam) → lens.google.com/uploadbyurl.
 import { esc, tg, reply, tgFileBytes } from "./base.js";
 import { uiLang } from "./ui.js";
 import { UA } from "./consts.js";
 
-// timeout upstream /sauce — env-knob (pola upstreamTmo NF-251019-4; default 25s = nilai lama SauceNAO; litterbox ikut knob 20s->25s)
 const sauceTmo = env => AbortSignal.timeout(parseInt((env && env.SAUCE_TIMEOUT_MS) || "", 10) || 25000);
 
-// rehost sementara buat tombol Lens (dan fallback url= kalau multipart SauceNAO gagal)
 async function litterUpload(env, bytes) {
   try {
     const fd = new FormData();
@@ -68,7 +63,7 @@ async function sauceSearch(env, chatId, fileId, L0) {
 
   let j = await sauceQuery(env, env.SAUCE_KEY, bytes, null).catch(() => null);
   let hostUrl = null;
-  if (!j || !j.results) { // multipart ditolak/gagal → fallback: rehost + url=
+  if (!j || !j.results) {
     hostUrl = await litterUpload(env, bytes);
     if (hostUrl) j = await sauceQuery(env, env.SAUCE_KEY, bytes, hostUrl).catch(() => null);
   }
@@ -79,7 +74,6 @@ async function sauceSearch(env, chatId, fileId, L0) {
   const { rs, lines, rows } = sauceRows(j);
   if (!rs.length) return fin(L.sauceNone, { inline_keyboard: [] });
 
-  // tombol Lens — pakai hostUrl yang udah ke-rehost, kalau belum upload sekarang
   let lens = null;
   if (hostUrl) lens = "https://lens.google.com/uploadbyurl?url=" + encodeURIComponent(hostUrl);
   else {
@@ -90,7 +84,6 @@ async function sauceSearch(env, chatId, fileId, L0) {
   return fin(L.sauceHead(rs.length) + "\n" + lines.join("\n"), { inline_keyboard: rows });
 }
 
-// foto dengan caption /sauce
 export async function handleSaucePhoto(env, msg, chatId) {
   const sizes = msg.photo || [];
   const best = sizes[sizes.length - 1];
@@ -98,7 +91,6 @@ export async function handleSaucePhoto(env, msg, chatId) {
   return sauceSearch(env, chatId, best.file_id);
 }
 
-// /sauce sebagai text command — reply ke foto
 export async function handleSauceCmd(env, msg, chatId) {
   const L = await uiLang(env);
   const rp = msg.reply_to_message;

@@ -494,10 +494,6 @@ export async function handleAbort(env, chatId) {
   return notify(env, chatId, L.abSent);
 }
 
-// ---- R-50: /undo — drop the last exchange from context (cheap comfort feature) ----------------
-// Drops [user, assistant] (or just the tail message) from CHAT_HIST_KEY. Does NOT delete the
-// Telegram messages (that is /delete's job with its nuke tracker); this only rewinds what the
-// model sees, so the next reply is written as if the last exchange never happened.
 export async function handleUndo(env, chatId) {
   const L = await uiLang(env);
   const hist = await getJSON(env, CHAT_HIST_KEY, []);
@@ -673,7 +669,6 @@ export async function handleRewind(env, msg, chatId) {
   }
 }
 
-// === edit fitur (v2.63.0): reply-edit pesan bot + edited_message regen ===
 function normForSim(s) {
   return String(s || "").toLowerCase().replace(/[*_~>#]/g, " ").replace(/\s+/g, " ").trim();
 }
@@ -695,9 +690,6 @@ function simRatio(a, b) {
   return 1 - prev[n] / Math.max(m, n);
 }
 
-// reply ke pesan bot dengan "// teks baru" (marker eksplisit) ATAU teks yang >=80% mirip
-// = edit pesan bot di tempat (editMessageText) + ganti konten di hist + hapus pesan reply.
-// return true kalau update ini ditelan (bukan turn chat normal).
 export async function maybeReplyEdit(env, msg, chatId) {
   const r = msg.reply_to_message;
   if (!r || !r.message_id) return false;
@@ -736,10 +728,6 @@ export async function maybeReplyEdit(env, msg, chatId) {
   return true;
 }
 
-// user edit pesannya sendiri di TG = Telegram kirim update.edited_message.
-// kalau mid itu masih ada di hist sebagai entry user: potong hist ke situ,
-// hapus semua pesan TG sesudahnya (pola /rewind), lalu jalankan turn ulang
-// pakai teks baru. entry user baru NYEKAP mid yang sama = edit berulang tetep kedetek.
 export async function handleEditedMsg(env, msg) {
   if (!msg || !msg.chat) return;
   const chatId = msg.chat.id;

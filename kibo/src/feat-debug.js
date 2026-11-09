@@ -1,11 +1,3 @@
-// feat-debug — owner-only debug mode: toggle + per-command log ring (session-grouped) + realtime stream + full-log dump.
-// Debug ON (flag "debug_flag" = "1"):
-//   1) tiap command/callback/notify + kejadian internal (AI call, tool, error) dicatat ring in-memory (max DBG_RING_MAX).
-//   2) GET /dbg balas "1" -> glm-watch.sh self-gate.
-//   3) realtime stream: selama jendela DBG_STREAM_MS (default 1 mnt) sejak dinyalain, tiap log di-push ke chat owner
-//      (throttle DBG_STREAM_MIN_GAP), abis itu auto-off (ring tetep).
-//   4) /debug log [N] (default 3): dump full trace dari N sesi command terakhir — biar error bisa dianalisis langsung.
-// Debug OFF: gak ada logging, /dbg balas "0", glm-watch senyap.
 import { esc, notify, tg } from './base.js';
 import { uiLang, fmtWIB } from './ui.js';
 import { DEBUG_FLAG, DBG_RING_MAX, DBG_STREAM_MS, DBG_STREAM_MIN_GAP, WIB, LIVE_CTX } from './consts.js';
@@ -14,13 +6,12 @@ const DBG_RING = [];
 export function clearDbgRing() { DBG_RING.length = 0; SESS_LABELS.clear(); SESS_CUR = 0; }
 let DBG_ACTIVE = false;
 let DBG_ACTIVE_AT = 0;
-let STREAM_UNTIL = 0;   // ms: auto-stop push realtime
-let STREAM_LAST = 0;    // ms push terakhir (throttle)
+let STREAM_UNTIL = 0;
+let STREAM_LAST = 0;
 const REFRESH_MS = 5000;
 
-// session grouping — tiap cmd/cb/notify mulai "sesi" baru; log internal (ai/tool/err) nempel ke sesi itu.
 let SESS_CUR = 0;
-const SESS_LABELS = new Map(); // id -> {label, t}
+const SESS_LABELS = new Map();
 function beginSession(kind, msg) {
   const id = ++SESS_CUR;
   const label = kind === "cmd" ? String(msg).slice(0, 40)
@@ -44,7 +35,7 @@ function compactWIB(sec) {
 function pushLive(env, entry) {
   const now = Date.now();
   if (now >= STREAM_UNTIL) return;
-  if (now - STREAM_LAST < dbgStreamGap(env)) return;  // throttled (tetap di ring)
+  if (now - STREAM_LAST < dbgStreamGap(env)) return;
   STREAM_LAST = now;
   const line = "\uD83D\uDC1E <b>[" + esc(entry.k) + "]</b> " + esc(entry.v) + " \u00B7 " + compactWIB(entry.t);
   const job = env.KV.get("owner_chat")
@@ -53,7 +44,6 @@ function pushLive(env, entry) {
   try { if (LIVE_CTX && typeof LIVE_CTX.waitUntil === "function") LIVE_CTX.waitUntil(job); } catch (_) {}
 }
 
-// Sync + fire-and-forget refresh — gak nge-block KV read per command.
 export function dbgLog(env, kind, msg) {
   const now = Date.now();
   if (now - DBG_ACTIVE_AT > REFRESH_MS) {
@@ -88,7 +78,6 @@ export async function getDebug(env) {
   try { return (await env.KV.get(DEBUG_FLAG)) === "1"; } catch (_) { return false; }
 }
 
-// GET /dbg -> "1"|"0" (text) — dibaca glm-watch.sh buat self-gate alert edge-stall.
 export async function handleDbgFlag(request, env) {
   if (request.method !== "GET") return new Response("method not allowed", { status: 405 });
   const on = await getDebug(env);
@@ -117,7 +106,6 @@ export async function renderDebugView(env) {
 export async function renderLogView(env, n) {
   const L = await uiLang(env);
   n = Math.max(1, Math.min(10, parseInt(String(n), 10) || 3));
-  // grup ring by session, urut dari sesi terbaru; ambil n sesi terakhir (yang punya minimal 1 entry)
   const bySess = new Map();
   for (const r of DBG_RING) { if (!bySess.has(r.s)) bySess.set(r.s, []); bySess.get(r.s).push(r); }
   const sessOrder = [...bySess.keys()].sort((a, b) => b - a).slice(0, n);

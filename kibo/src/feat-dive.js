@@ -156,7 +156,7 @@ export async function diveStart(env, chatId, mid) {
   const st = await getJSON(env, DIVE_STATE_KEY + chatId, null);
   if (st && st.d === day && !st.done) {
     if (st.paused) { delete st.paused; }
-    st.ts = Date.now(); // v2.69.3: resume = aktivitas baru → panjangin jendela jawaban; fix jawaban AFK kebuang ke AI asli
+    st.ts = Date.now();
     await putJSON(env, DIVE_STATE_KEY + chatId, st);
     await gameIdleReg(env, chatId);
     const set = (await getJSON(env, DIVE_DAY_KEY + day, null)) || null;
@@ -219,7 +219,7 @@ export async function divePreGen(env) {
   const dk = await getJSON(env, DIVE_DAY_KEY + day, null);
   if (dk && dk.prompts) return;
   const dv = (await env.KV.get(DIVE_DEF_KEY)) || null;
-  const m = DIVE_MODES.some(x => x.k === dv) ? dv : "normal"; // gak ada default mode = pregen tetep jalan (normal); dulu diam-diam skip = set harian bolong sampai ada yang /dive
+  const m = DIVE_MODES.some(x => x.k === dv) ? dv : "normal";
   await putJSON(env, mkKey, 1, { ttlMs: DIVE_DAY_TTL_MS });
   try {
     const g = await diveGen(env, 7, diveSeedPrompt(7, false, m));
@@ -555,7 +555,7 @@ export async function divePrac(env, chatId, mid) {
   const pst = await getJSON(env, DIVE_PRAC_KEY + chatId, null);
   if (pst && pst.d === todayDay() && pst.set && pst.set.prompts && pst.set.prompts.length && (!pst.done || (pst.i === 0 && !(pst.res && pst.res.length)))) {
     pst.done = 0;
-    pst.ts = Date.now(); // v2.69.3: resume practice = aktivitas baru → panjangin jendela jawaban (fix AFK jawab kebuang ke AI)
+    pst.ts = Date.now();
     pst.mid = mid || pst.mid || 0;
     const j = await editView(env, chatId, mid || pst.mid, divePromptView(pst, L, pst.set));
     if (j && j.ok && j.result && j.result.message_id && j.result.message_id !== pst.mid) pst.mid = j.result.message_id;

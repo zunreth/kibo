@@ -363,8 +363,8 @@ export default {
       return new Response("not found", { status: 404 });
     }
     if (url.pathname === "/notify") return handleNotify(request, env);
-    if (request.method === "POST" && url.pathname === "/nhcb") return handleNhCb(request, env); // v2.70.4: callback GHA builder zip
-    if (request.method === "POST" && url.pathname === "/ytcb") return handleYtCb(request, env); // v2.76.0: callback GHA builder yt-dlp
+    if (request.method === "POST" && url.pathname === "/nhcb") return handleNhCb(request, env);
+    if (request.method === "POST" && url.pathname === "/ytcb") return handleYtCb(request, env);
     if (request.method === "GET" && url.pathname === "/dbg") return handleDbgFlag(request, env);
     if (request.method !== "POST" || !url.pathname.startsWith("/hook/")) {
       return new Response("not found", { status: 404 });
@@ -393,9 +393,6 @@ export default {
   async scheduled(event, env, ctx) {
     setLiveCtx(ctx);
     try { if (!env.__kvw) { env.KV = wrapStore(env); env.__kvw = true; } } catch (_) {}
-    // R-02: every job leaves a heartbeat, so a job that stops firing becomes visible in /sys instead
-    // of being noticed weeks later. A failing job reports through the R-05 path and marks the tick
-    // unhealthy for the R-03 dead-man switch.
     ctx.waitUntil((async () => {
       let allOk = true;
       const beat = async (name, p) => {
@@ -510,7 +507,7 @@ async function handleUpdate(update, env) {
   if (cmd === "/anime") return handleAnime(env, "anime", chatId, text.slice(cmd.length).trim());
   if (cmd === "/manga") return handleAnime(env, "manga", chatId, text.slice(cmd.length).trim());
   if (cmd === "/weather") return handleWx(env, msg, chatId, text.slice(cmd.length).trim());
-  if (cmd === "/cuaca") return handleWx(env, msg, chatId, text.slice(cmd.length).trim()); // alias
+  if (cmd === "/cuaca") return handleWx(env, msg, chatId, text.slice(cmd.length).trim());
   if (cmd === "/hn") return handleHn(env, chatId, text.slice(cmd.length).trim());
   if (cmd === "/np") return handleNp(env, chatId);
   if (cmd === "/focus") { await delCmd(env, chatId, msg.message_id); return handleFocus(env, msg, chatId); }
@@ -553,7 +550,6 @@ async function handleUpdate(update, env) {
     fReact(env, chatId, msg.message_id, text).catch(() => {});
     const bare = text.trim();
     if (/^https?:\/\/\S+$/.test(bare) && dlPlatform(bare) && (await env.KV.get(AUTO_DL_KEY)) !== "off") { await delCmd(env, chatId, msg.message_id); return handleDl(env, msg, chatId); }
-    // v2.71.0: link nhentai / cin.guru yang ditempel = permintaan /nh (pakai format default)
     const nhHit = nhLinkId(bare);
     if (nhHit) { await delCmd(env, chatId, msg.message_id); return nhRun(env, chatId, nhHit.id, nhHit.fmt); }
     return handleText(env, msg, chatId);
@@ -782,19 +778,16 @@ async function handleCallback(env, cb) {
     await tg(env, "answerCallbackQuery", { callback_query_id: cb.id, text: cur ? L.popAutoOff : L.popAutoOn });
     await edit(await renderCfgView(env));
   } else if (act === "nhdef" && chatId) {
-    // v2.71.0: format default /nh (album|zip|pdf|scroll) — dipakai /nh tanpa format + link auto-detect
     const k = ["album", "zip", "pdf", "scroll"].includes(arg) ? arg : "album";
     await env.KV.put(NH_DEF_KEY, k);
     await tg(env, "answerCallbackQuery", { callback_query_id: cb.id, text: L.nhDefPop(L.nhDefLbl(k)) });
     await edit(await renderNhDefView(env));
   } else if (act === "nhprov" && chatId) {
-    // v2.72.0: provider upload builder (auto|x0at|kappa) — dikirim ke GHA di payload dispatch
     const k = ["auto", "x0at", "kappa"].includes(arg) ? arg : "auto";
     await env.KV.put(NH_HOST_KEY, k);
     await tg(env, "answerCallbackQuery", { callback_query_id: cb.id, text: L.nhProvPop(L.nhProvLbl(k)) });
     await edit(await renderNhProvView(env));
   } else if (act === "nhpdfq" && chatId) {
-    // v2.73.0: preset kualitas PDF (normal|small) — ikut payload dispatch
     const k = ["normal", "small"].includes(arg) ? arg : "normal";
     await env.KV.put(NH_PDFQ_KEY, k);
     await tg(env, "answerCallbackQuery", { callback_query_id: cb.id, text: L.nhPdfPop(L.nhPdfLbl(k)) });
@@ -810,24 +803,18 @@ async function handleCallback(env, cb) {
   } else if (act === "ytpick" && chatId) {
     await handleYtsPick(env, cb.id, chatId, mid, arg);
   } else if (act === "ytb" && chatId) {
-    // v2.76.0: 720p / MP3 build button from the YouTube menu
     await handleYtBuild(env, cb.id, chatId, mid, arg);
   } else if (act === "ytg" && chatId) {
-    // v2.76.3: GitHub Actions build — only after the owner confirms on the button
     await handleYtGha(env, cb.id, chatId, mid, arg);
   } else if (act === "ytup" && chatId) {
-    // v2.76.2: "send it into the chat" — the resolver link refuses Telegram's fetchers, so the
-    // Worker pulls the bytes and re-uploads them (only when the owner asks, it is slow)
     await handleYtUpload(env, cb.id, chatId, mid, arg);
   } else if (act === "nhsave" && chatId) {
     await handleNhSave(env, cb.id, chatId, arg);
   } else if (act === "nhop" && chatId) {
     await handleNhop(env, cb.id, chatId, arg);
   } else if (act === "nhnz" && chatId) {
-    // v2.73.0: tombol "Bikin ZIP" (album & /nhs) — cache dulu, baru dispatch builder
     await handleNhNzip(env, cb.id, chatId, arg);
   } else if (act === "nh" && chatId) {
-    // R-48: satu hasil search dipilih → jalur build biasa (id + format default)
     await tg(env, "answerCallbackQuery", { callback_query_id: cb.id, text: "\u{1F4E6}" });
     await nhRun(env, chatId, arg, "", "");
   } else if (act === "hostp" && chatId) {

@@ -225,7 +225,6 @@ export async function pasteGet(env, id) {
   return hit && hit.t ? hit.t : null;
 }
 
-// /hn — HN front page via algolia (1 fetch keyless, CF-egress verified 28 Okt) — cache 30 mnt
 const HN_KEY = "hn_top";
 const HN_TTL_MS = 30 * 60 * 1000;
 export async function handleHn(env, chatId, arg) {

@@ -460,8 +460,6 @@ export async function handleTts(env, msg, chatId) {
   if (next) await reply(env, chatId, L.ttsOnNote);
 }
 
-// R-16: age chip. Entries written before v2.79.0 have no src/ts fields - they render as
-// "manual" with no age rather than pretending to a provenance they never had.
 function memAge(ms, L) {
   if (!ms) return "";
   const d = Math.floor((Date.now() - ms) / 86400000);
@@ -579,10 +577,6 @@ export async function handleOtp(env, chatId) {
   await tg(env, "sendMessage", { chat_id: chatId, text: v.text, parse_mode: "HTML", reply_markup: v.markup });
 }
 
-// ---- R-18: /export — dump the current conversation as .md or .json -------------------------
-// The visible window is small by design (CHAT_HIST_MAX), so the export also carries the running
-// condensed summary (HIST_SUM_KEY) when present - that is the only honest "full" copy we can give.
-// Exports the personal conversation; roleplay chapters live in their own saves/wrap.
 export async function handleExport(env, msg, chatId) {
   const L = await uiLang(env);
   const body = (msg.text || "").replace(/^\/\S+\s*/, "").trim().toLowerCase();
@@ -698,8 +692,6 @@ export async function kvQuotaReal(env, acct, token) {
 
 import { cronLedger, cronStaleAt, CRON_JOBS } from './cron-ledger.js';
 
-// R-07: the pruning instrument. Everything registered is compared against what was actually called
-// in the last 30 days, so removing a feature becomes a data decision instead of a feeling.
 export async function renderUsageView(env) {
   const L = await uiLang(env);
   const cu = (await getJSON(env, "cmduse", null)) || { d: {} };
@@ -1077,7 +1069,6 @@ export async function renderCfgView(env) {
   };
 }
 
-// v2.72.0: hub NH — dua submenu (format + provider)
 export async function renderNhSetHub(env) {
   const L = await uiLang(env);
   return {
@@ -1128,7 +1119,6 @@ export async function renderNhPdfqView(env) {
   };
 }
 
-// v2.73.0: stats harian /nh — hit (cache) vs ok/fail/timeout (builder) + estimasi kuota GHA
 export async function renderNhStatsView(env) {
   const L = await uiLang(env);
   const now = Date.now();

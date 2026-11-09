@@ -27,11 +27,8 @@ export const REL_PREFIX = "char_rel_";
 export const REL_GAP_MS = 30 * 60 * 1000;
 export const SYS_REL = "You track the evolving relationship between the user and their roleplay character. Given the current relationship state and recent dialogue, output ONLY a JSON object: {\"d\": <integer, change in closeness from -10 to 10>, \"mood\": \"<current mood of the character, 1-2 words>\", \"note\": \"<one short sentence describing the current dynamic>\"}. No other text, no markdown.";
 export const MEM_KEY = "memories";
-// R-16 Memory v2: one small extraction AI call per day. The per-day marker is written only AFTER
-// the facts are saved, so a failed/partial day is retried on the next tick and a finished day never
-// runs twice. R-18 /export and R-50 /undo add no new keys (they read the existing history).
-export const MEM_EXTRACT_KEY = "mem_x_done:"; // + WIB day string
-export const MEM_EXTRACT_MAX = 3; // max new facts saved per run
+export const MEM_EXTRACT_KEY = "mem_x_done:";
+export const MEM_EXTRACT_MAX = 3;
 export const MEM_MAX = 50;
 export const OWNER_FALLBACK = "";
 export const CHAR_KEY = "chars";
@@ -141,7 +138,7 @@ export const KYIO_BASE = "https://api.kyio.web.id";
 export const DL_CACHE_TTL_MS = 60 * 60 * 1000;
 export const DL_MAX_LINKS = 20;
 export const DL_SEND_MAX = 15 * 1024 * 1024;
-export const DL_URL_SEND_MAX = 20 * 1024 * 1024; // TG bot by-URL = 20MB — gate known-size pake ini (band 15-20MB = by-URL doang, bytes fallback gak kuat)
+export const DL_URL_SEND_MAX = 20 * 1024 * 1024;
 export const DL_SEND_PHOTO_MAX = 5 * 1024 * 1024;
 export const AUTO_DL_KEY = "autodl";
 export const DL_DEL_MS = 5 * 60 * 1000;
@@ -150,70 +147,46 @@ export const DL_MENU_TTL_MS = 5 * 60 * 1000;
 export const DL_PICK_PREFIX = "dlpick:";
 export const DL_SAV_PREFIX = "dlsav:";
 export const DL_SAV_TTL_MS = 60 * 60 * 1000;
-export const DL_BIG_PREFIX = "dlbig:"; // URL ketahuan gak bisa dikirim (dipelajari dari pick gagal) → menu langsung Direct Link (v2.68.3)
-export const YT_PICK_PREFIX = "ytpick:"; // v2.68.8: token pick hasil /yts (URL video → /dl chain)
-// v2.76.0: YouTube delivery goes through the GHA builder (yt-dlp): third-party CDN links
-// cannot be handed to Telegram (those hosts block Telegram's fetchers), so the only files
-// that actually arrive are ones we upload ourselves to kappa.lol.
-export const YT_BUILD_PREFIX = "ytb:";     // menu token {url,title,author}, 1h TTL, shared by the 720p and MP3 buttons
-export const YT_JOB_PREFIX = "yt_job:";     // in-flight builder job {chat,mid,u,kind,ts} — single use
-export const YT_BUSY_PREFIX = "yt_busy:";   // anti-double: same video+kind still running → reject
-export const YT_CACHE_PREFIX = "yt_cache:"; // build result per video+kind → next tap is instant
+export const DL_BIG_PREFIX = "dlbig:";
+export const YT_PICK_PREFIX = "ytpick:";
+export const YT_BUILD_PREFIX = "ytb:";
+export const YT_JOB_PREFIX = "yt_job:";
+export const YT_BUSY_PREFIX = "yt_busy:";
+export const YT_CACHE_PREFIX = "yt_cache:";
 export const YT_CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 export const YT_CACHE_TTL_TMP_MS = 3 * 24 * 60 * 60 * 1000;
-export const YT_UP_PREFIX = "ytup:"; // "send it into the chat" token for a resolver link (bytes through us)
-// v2.78.1: the resolve chain gets a wall-clock budget and a job record. The webhook answers 200 in
-// milliseconds and Cloudflare keeps the isolate alive only ~30 s past that (measured: a 28 s sleep
-// survives, 32 s does not), while the chain below can spend minutes in per-hop timeouts. Without
-// both, an over-budget chain is killed mid-flight and the "fetching…" placeholder stays forever.
-export const YT_RESOLVE_PREFIX = "ytr:";   // in-flight resolve {chat,mid,kind,vid,ts} — closed by the watchdog
-export const YT_RESOLVE_DEAD_MS = 90000;   // a resolve record older than this = the invocation died
-// v2.78.2: /dl non-YouTube chains get the same wall-clock budget (env-tunable, default 60 s) — a
-// slow resolver that answers at the last second must not leave the photo-send/menu phase to die.
-export const SC_CID_KEY = "sc_cid"; // v2.78.0: SoundCloud client_id — rotates, cached ~1 h
+export const YT_UP_PREFIX = "ytup:";
+export const YT_RESOLVE_PREFIX = "ytr:";
+export const YT_RESOLVE_DEAD_MS = 90000;
+export const SC_CID_KEY = "sc_cid";
 export const SC_CID_TTL_MS = 60 * 60 * 1000;
-export const SC_SEG_MAX = 26 * 1024 * 1024; // HLS concat ceiling (one isolate holds the blob)
-export const YT_AIO_PREFIX = "yt_aio:"; // v2.78.0: nexray aio rung list + muxed 360p URL, per video
-// v2.76.2: puruboy is the only working keyless YouTube resolver left (yt-dlp in an E2B sandbox
-// behind a token-gated proxy). Its links refuse Telegram's fetchers, so the Worker downloads and
-// re-uploads the bytes itself — no GitHub Actions unless the resolver is down.
+export const SC_SEG_MAX = 26 * 1024 * 1024;
+export const YT_AIO_PREFIX = "yt_aio:";
 export const PURUBOY_BASE = "https://na-api-nue-api-e7bfd3f4.koyeb.app";
-export const BTCH_BASE = "https://btch-downloader-api-green.vercel.app"; // fast proxy (29 MB/s measured), no quality ladder
-// v2.76.9: Nexray is the only source that hands out a real MP3 (its ytmp3 route proxies to
-// beta.123tokyo.xyz, which answers any IP).
-// v2.78.0: its /downloader/aio DOES have one usable YouTube rung — itag 18, a muxed 360p
-// (avc1+mp4a in one file). Everything above it is a DASH stream with no audio track, and the
-// URLs are signed to whichever IP resolved them (measured 2 of 3 clips worked from our egress),
-// so every rung has to be probed before it becomes a button.
+export const BTCH_BASE = "https://btch-downloader-api-green.vercel.app";
 export const NEXRAY_BASE = "https://api.nexray.eu.cc";
-// v2.78.0: sparky is the sturdiest keyless TikTok/IG/FB resolver left (20/20 burst, 20/20
-// sequential in the Nov research) — a second opinion for the days btch answers 502.
 export const SPARKY_BASE = "https://api-aswin-sparky.koyeb.app";
-export const YT_UPLOAD_MAX = 40 * 1024 * 1024; // multipart ceiling we can hold in one isolate
-// v2.69.13: album full-Worker VPS-independent — nhMeta cuma ke nhdl-w (mirror cin.guru + API fallback + cache); /nh tanpa format WAJIB album; gak ada egress VPS buat metadata
-export const NH_SAVE_PREFIX = "nhsav:";   // token button "Simpan ke vault" bawa {id,title,pages}
-export const NH_SAVES_KEY = "nh_saves";   // daftar referensi nh yang disimpan (JSON array per chat)
-export const NH_AUTODEL_MS = 5 * 60 * 1000; // album auto-delete ~5 menit (owner prefer)
-export const NH_JOB_PREFIX = "nh_job:";   // v2.70.4: job key async zip builder (GHA) bawa {id,fmt,chat} — sekali pakai, TTL 20 mnt
+export const YT_UPLOAD_MAX = 40 * 1024 * 1024;
+export const NH_SAVE_PREFIX = "nhsav:";
+export const NH_SAVES_KEY = "nh_saves";
+export const NH_AUTODEL_MS = 5 * 60 * 1000;
+export const NH_JOB_PREFIX = "nh_job:";
 export const NH_JOB_TTL_MS = 20 * 60 * 1000;
-export const NH_BUSY_PREFIX = "nh_busy:"; // v2.70.5: anti-dobel — id+fmt sama per chat lagi jalan → tolak (TTL sama dgn job)
-export const NH_DEF_KEY = "nh_def";     // v2.71.0: format default /nh + link auto-detect (album|zip|pdf|scroll)
-export const NH_KEEP_PREFIX = "nhkeep:";  // v2.71.0: penanda "jangan hapus" — diisi pas tombol 💾 ditekan, dibaca delQsweep
-export const NH_HOST_KEY = "nh_host";   // v2.72.0: provider upload builder (auto|x0at|kappa)
-export const NH_PDFQ_KEY = "nh_pdfq";   // v2.73.0: preset kualitas PDF (normal|small) — ikut payload dispatch
-// v2.73.0: cache hasil build — id+fmt yang sama gak perlu dispatch GHA lagi (link provider permanen)
+export const NH_BUSY_PREFIX = "nh_busy:";
+export const NH_DEF_KEY = "nh_def";
+export const NH_KEEP_PREFIX = "nhkeep:";
+export const NH_HOST_KEY = "nh_host";
+export const NH_PDFQ_KEY = "nh_pdfq";
 export const NH_CACHE_PREFIX = "nh_cache:";
-export const NH_CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000;    // provider permanen (kappa.lol)
-export const NH_CACHE_TTL_TMP_MS = 3 * 24 * 60 * 60 * 1000;  // host auto-expire (x0.at)
-// R-12: recent builds, newest first — what `/nh last` re-sends without dispatching a build.
+export const NH_CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+export const NH_CACHE_TTL_TMP_MS = 3 * 24 * 60 * 60 * 1000;
 export const NH_RECENT_KEY = "nh_recent";
 export const NH_RECENT_MAX = 10;
-// v2.73.0: counter harian buat /settings → NH → stats (ok/fail/timeout/hit/mb)
 export const NH_STAT_PREFIX = "nh_stat:";
 export const NH_STAT_TTL_MS = 60 * 24 * 60 * 60 * 1000;
-export const NH_DEAD_MS = 15 * 60 * 1000;  // v2.73.0: watchdog — job tanpa callback > 15 mnt dianggap mati (TTL job 20 mnt)
-export const NH_QUOTA_WARN = 30;           // build/hari sebelum ngingetin kuota GHA
-export const YTS_MAX = 6; // v2.68.8: jumlah hasil /yts
+export const NH_DEAD_MS = 15 * 60 * 1000;
+export const NH_QUOTA_WARN = 30;
+export const YTS_MAX = 6;
 export const GAME_LYRIC_KEY = "glyric:";
 export const LYRIC_PTS = 8;
 export const LYRIC_POOL_MAX = 30;
@@ -278,18 +251,17 @@ export const NOTIFY_DAY_KEY = "notifyday";
 export const NOTIFY_CAP = 200;
 export const DEBUG_FLAG = "debug_flag";
 export const DBG_RING_MAX = 200;
-export const DBG_STREAM_MS = 60000;   // v2.69.4: realtime stream log ke chat auto-off setelah sedetik ini (default 1 mnt)
-export const DBG_STREAM_MIN_GAP = 1000; // throttle antar-msg push (skip kalau < gap)
+export const DBG_STREAM_MS = 60000;
+export const DBG_STREAM_MIN_GAP = 1000;
 export const CHAIN_KEY = "chain:";
 export const CHAIN_STEP_PTS = 5;
 export const CHAIN_BONUS = 50;
-export const CHAIN_SHIELD = 1; // v2.68.14: hadiah tamat arc = +1 shield (bukan hangus/deadline; benefit permanen jaga streak)
+export const CHAIN_SHIELD = 1;
 export const CHAIN_GEN_STALE_MS = 180000;
 export const SYS_MEM_EXTRACT = "You extract durable personal facts from a conversation log between the user and their assistant kibo. Find at most 3 NEW facts worth remembering long-term: stable things about the user (preferences, skills, home, work, ongoing projects, relationships, pets, health, schedule). NOT one-off moods, NOT questions, NOT small talk, NOT anything already listed under KNOWN FACTS (already saved - if everything new is already covered, output DONE). Output format: one fact per line, plain text, no bullets, no numbering, no commentary, no thinking out loud. Max 30 words per fact, written from the assistant's perspective (about the user). If nothing qualifies, output exactly DONE.";
 export const SYS_CHAIN = "You generate a tiny 5-day quest arc for the user's Telegram bot companion. Reply with EXACTLY one line, pipe-separated, NO extra text, no markdown, no quotes: ArcName | step1 | step2 | step3 | step4 | step5. ArcName = a catchy title (max 6 words) for a fun, imaginative mini-adventure rooted in everyday life — habits, fitness, productivity, learning, a cozy hobby, or a small personal project. Frame it like a light RPG challenge so it feels exciting, but keep it believable: the 5 steps are a connected journey (day 1 an easy warm-up, days 2-4 climbing the arc, day 5 a satisfying finish). Each step = a short vivid label (max 8 words) the user can picture themselves doing. Make it fun, punchy, and a little playful — but NOT absurd, cartoonish, or slapstick (no talking animals, no stealing, no magical hijinks). Each step builds on the previous.";
 export const BOT_VER = "2.79.0";
 
-// edit-fitur v2.63.0
 export const EDIT_MARKER = "//";
 export const EDIT_SIM_MIN = 0.8;
 export const EDIT_LEN_MIN = 25;

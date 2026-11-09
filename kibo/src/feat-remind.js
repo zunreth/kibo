@@ -364,12 +364,6 @@ export async function handleJournal(env, msg, chatId) {
   await notify(env, chatId, L.jSaved(fmtWIB(Math.floor(Date.now() / 1000), L)) + (moods.length ? L.jMood + moods.map(t => "#" + t).join(" ") : ""));
 }
 
-// ---- R-16: automatic daily fact extraction (one AI call per day) ------------------------------
-// Cheap contract: one chatStream request, max 300 tokens, no tools. The per-day marker is a JSON
-// array; "ok" is pushed only AFTER the facts are saved (a throw or a failed fetch leaves no marker,
-// so the next cron tick retries). Near-duplicate suppression is a local case-insensitive check
-// against both the full memory list and today's marker - the model gets KNOWN FACTS as a hint, but
-// the local check is what actually guarantees no spam.
 function memNorm(s) {
   return String(s || '').toLowerCase().replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
 }
@@ -382,9 +376,6 @@ function memDupe(fact, texts) {
     if (!n) continue;
     if (n === f) return true;
     if (words.length > 2) {
-      // Jaccard over the longer side's significant words: order/typos survive, a genuinely new
-      // fact shares at most a couple of words. The ceil(0.8) containment was blind to word-order
-      // swaps and to "n has the words but as substrings of other words".
       const nw = n.split(' ').filter(x => x.length > 3);
       const A = new Set(words), B = new Set(nw);
       let inter = 0;
@@ -424,7 +415,7 @@ export async function memExtractTry(env) {
   const before = mems.length;
   for (const f of facts) {
     if (memDupe(f, mems.map(x => x.text))) continue;
-    globalThis.__memAuto = true; // read by saveMemory → provenance src:"auto"
+    globalThis.__memAuto = true;
     let id = 0;
     try { id = await saveMemory(env, f); } finally { globalThis.__memAuto = false; }
     if (id) mems.push({ id: id, text: f });
@@ -434,14 +425,13 @@ export async function memExtractTry(env) {
   return added ? "new:" + added : "empty";
 }
 
-// ---- R-35: weekly recap (one AI call, Sunday 21:35 WIB) ---------------------------------------
 export async function memRecapCron(env) {
   const now = new Date(Date.now() + WIB * 1000);
   if (now.getUTCDay() !== 0 || now.getUTCHours() !== 21 || now.getUTCMinutes() < 30 || now.getUTCMinutes() >= 40) return;
   const dayNow = questDay(Math.floor(Date.now() / 1000));
   const week = questDay(Math.floor(Date.now() / 1000) - 7 * 86400);
   const card = await getActiveCard(env);
-  if (card) return; // roleplay characters have their own wrap; the recap covers the personal side
+  if (card) return;
   const rk = "mem_recap_" + week;
   if (await env.KV.get(rk)) return;
   const mems = await getJSON(env, MEM_KEY, []);
@@ -833,7 +823,7 @@ export async function handleQuestCb(env, chatId, mid, arg) {
   }
   if (reacted) await putJSON(env, "quest", q);
   if (q.done) await addPts(env, 10 + q.loot.amt);
-  if (q.done) { try { await chainStep(env, chatId); } catch (_) {} } // tombol ✓/Done harian = majuin arc quest (mirror questMark)
+  if (q.done) { try { await chainStep(env, chatId); } catch (_) {} }
 
   if (mid && reacted) {
     if (q.done) { try { await tg(env, "setMessageReaction", { chat_id: chatId, message_id: mid, reaction: [{ type: "emoji", emoji: "\u{1F4AF}" }] }); } catch (_) {} }
@@ -961,14 +951,11 @@ export async function runCron(env) {
   await lifeCron(env, nowSec);
 }
 
-// Quest ping = slot acak per-hari (Duolingo-style nudge), 10:00-19:59 WIB — gak nempel good morning pagi.
-// Hash hari -> menit: deterministik dalam hari yang sama (cron tiap menit butuh keputusan stabil), beda tiap hari.
-// fireQuest sendiri tetep gak nge-push kalau quest udah delivered/done/skipped hari itu.
 const QPING_LO = 10 * 60, QPING_SPAN = 10 * 60;
 export function questPingSlot(dayStr) {
   let h = 2166136261;
   for (const c of String(dayStr)) { h ^= c.charCodeAt(0); h = Math.imul(h, 16777619); }
-  h ^= h >>> 15; h = Math.imul(h, 2246822519); h ^= h >>> 13; // murmur3 finalizer: biar tanggal berurutan gak ngeluarin slot yang cuma geser 1-2 menit
+  h ^= h >>> 15; h = Math.imul(h, 2246822519); h ^= h >>> 13;
   return QPING_LO + (h >>> 0) % QPING_SPAN;
 }
 
