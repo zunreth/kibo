@@ -1633,7 +1633,7 @@ const btchAudio = (env, url) => btchYt(env, url, "mp3");
 
 // Resolver bytes → Telegram. 40 MB is our own ceiling (one isolate holds the blob); past that the
 // link is the honest answer, because Telegram cannot fetch these hosts itself.
-async function ytUploadResolved(env, chatId, L, mid, url, kind, title, fmt, tmo) {
+async function ytPull(env, chatId, url, tmo) {
   let f = null;
   try {
     const r = await fetch(url, { headers: { "user-agent": UA }, signal: AbortSignal.timeout(tmo || 90000) });
@@ -1653,6 +1653,11 @@ async function ytUploadResolved(env, chatId, L, mid, url, kind, title, fmt, tmo)
       if (got > 0) f = { chunks, size: got };
     }
   } catch (e) { if (env.__probe) env.__probe.push({ mid: null, method: "ytfetch", chat: chatId, text: "ERR " + String((e && e.message) || e).slice(0, 80) }); }
+  return f;
+}
+
+async function ytUploadResolved(env, chatId, L, mid, url, kind, title, fmt, tmo) {
+  const f = await ytPull(env, chatId, url, tmo);
   if (!f) return false;
   const head = "<b>" + (kind === "mp3" ? "\uD83C\uDFB5" : "\uD83C\uDFAC") + " " + hesc(String(title || "YouTube").slice(0, 110)) + "</b>\n" + L.ytLinkMeta(fmt, (f.size / 1048576).toFixed(1), "");
   const form = new FormData();
@@ -1675,13 +1680,43 @@ async function ytUploadResolved(env, chatId, L, mid, url, kind, title, fmt, tmo)
   return !!okMid;
 }
 
+// No audio-only source survives right now (ytdownloader.tech's mp3 queue times out, btch's audio
+// proxy stalls), but every rung we can already fetch is an mp4 with the audio track inside it.
+// Telegram accepts that container as `sendAudio` when it is named .m4a (verified: 200, audio/mp4),
+// so an audio request still ends as playable audio instead of a GitHub build.
+async function ytSendAsAudio(env, chatId, L, mid, url, title, dur, fmt, tmo) {
+  const f = await ytPull(env, chatId, url, tmo);
+  if (!f) return false;
+  const name = String(title || "YouTube").slice(0, 60);
+  const head = "<b>\uD83C\uDFB5 " + hesc(String(title || "YouTube").slice(0, 110)) + "</b>\n" + L.ytLinkMeta(fmt || "audio", (f.size / 1048576).toFixed(1), "");
+  const form = new FormData();
+  form.append("chat_id", String(chatId));
+  form.append("audio", new Blob(f.chunks, { type: "audio/mp4" }), "audio.m4a");
+  form.append("title", name);
+  if (Number(dur) > 0) form.append("duration", String(Math.round(Number(dur))));
+  form.append("caption", head);
+  form.append("parse_mode", "HTML");
+  form.append("reply_markup", JSON.stringify({ inline_keyboard: [[{ text: L.ytDlBtnSz((f.size / 1048576).toFixed(1)), url: url }]] }));
+  let j = null;
+  try {
+    const r = await fetch("https://api.telegram.org/bot" + env.TG_TOKEN + "/sendAudio", { method: "POST", body: form, signal: tgUpTmo(env) });
+    j = await r.json().catch(() => null);
+    if (!j || !j.ok) tgErrLog(env, "sendAudio", j);
+  } catch (_) { j = null; }
+  const okMid = j && j.ok && j.result ? j.result.message_id : 0;
+  if (env.__probe && j && j.ok) env.__probe.push({ mid: okMid || null, method: "sendAudio", chat: chatId, text: String(head).slice(0, 400) });
+  if (mid) { try { await tg(env, "deleteMessage", { chat_id: chatId, message_id: mid }); } catch (_) {} }
+  if (okMid) await deleteLater(env, chatId, okMid, dlDelMs(env));
+  return !!okMid;
+}
+
 // Link card — instant, and the honest answer for hosts Telegram refuses to fetch. A second
 // button pulls the bytes through the Worker when the owner actually wants it in the chat.
-async function ytLinkCard(env, chatId, L, mid, fileUrl, kind, title, size, meta, upTok) {
+async function ytLinkCard(env, chatId, L, mid, fileUrl, kind, title, size, meta, upTok, note) {
   const m = meta || {};
   const mb = size ? (size / 1048576).toFixed(1) : "";
   const head = "<b>" + (kind === "mp3" ? "\uD83C\uDFB5" : "\uD83C\uDFAC") + " " + hesc(String(title || "YouTube").slice(0, 110)) + "</b>";
-  const txt = head + "\n" + L.ytLinkMeta(m.fmt || (kind === "mp3" ? "MP3" : ""), mb, m.exp || "") + "\n<i>" + L.ytLinkNote + "</i>";
+  const txt = head + "\n" + L.ytLinkMeta(m.fmt || (kind === "mp3" ? "MP3" : ""), mb, m.exp || "") + "\n<i>" + (note || L.ytLinkNote) + "</i>";
   const rows = [[{ text: L.ytDlBtnSz(mb || "?"), url: fileUrl }]];
   if (upTok) rows.push([{ text: L.ytToChat, callback_data: "ytup:" + upTok }]);
   const j = await tg(env, "sendMessage", { chat_id: chatId, text: txt, parse_mode: "HTML", disable_web_page_preview: true, reply_markup: { inline_keyboard: rows } });
@@ -1700,7 +1735,8 @@ export async function handleYtUpload(env, cbId, chatId, mid, tok) {
   if (mid) { try { await tg(env, "editMessageText", { chat_id: chatId, message_id: mid, text: L.ytUpWait, parse_mode: "HTML" }); } catch (_) {} }
   const ok = await ytUploadResolved(env, chatId, L, mid, e.u, e.k || "360", e.t || "", e.f || "");
   if (ok) { try { await env.KV.delete(YT_UP_PREFIX + tok); } catch (_) {} return; }
-  await reply(env, chatId, L.ytUpFail);
+  // Keep the buttons: telling someone to "use the link button" after deleting it is a dead end.
+  await ytLinkCard(env, chatId, L, mid, e.u, e.k || "360", e.t || "", e.sz || 0, { fmt: e.f || "" }, tok, L.ytUpFail);
 }
 
 // 720p / MP3 button: cache hit = instant, otherwise dispatch one builder job.
@@ -1727,7 +1763,7 @@ export async function handleYtBuild(env, cbId, chatId, mid, arg) {
     if (/^puruboy/.test(String(hit.host || "")) || /ytdownloader\.tech/.test(String(hit.u || ""))) {
       // Telegram cannot fetch these hosts — same card + "send to chat" as the first time
       const upTok = rndTok();
-      try { await putJSON(env, YT_UP_PREFIX + upTok, { c: chatId, u: hit.u, k: kind, t: hit.t || e.t || "", f: hit.fmt || "", exp: Date.now() + DL_SAV_TTL_MS }, env.DB ? { ttlMs: DL_SAV_TTL_MS } : undefined); } catch (_) {}
+      try { await putJSON(env, YT_UP_PREFIX + upTok, { c: chatId, u: hit.u, k: kind, t: hit.t || e.t || "", f: hit.fmt || "", sz: hit.sz || 0, exp: Date.now() + DL_SAV_TTL_MS }, env.DB ? { ttlMs: DL_SAV_TTL_MS } : undefined); } catch (_) {}
       const card = await ytLinkCard(env, chatId, L, mid, hit.u, kind, hit.t || e.t || "", hit.sz || 0, { fmt: hit.fmt }, upTok);
       if (card) return;
     }
@@ -1745,13 +1781,17 @@ export async function handleYtBuild(env, cbId, chatId, mid, arg) {
     // and throttles for us, so it is upload-only: never hand out a link we know is dead.
     const b = await btchYt(env, e.u, "video");
     if (b && await ytUploadResolved(env, chatId, L, wmid, b.u, kind, b.t || e.t || "", "BTCH", 45000)) return;
+    // btch refuses some clips outright (502 on every retry). The resolver still reads them, so fall
+    // back to its 360p rung instead of ending at a build card.
+    const pv = await pbYtEx(env, e.u, "360");
+    if (pv.ok && await ytUploadResolved(env, chatId, L, wmid, pv.u, "360", pv.t || e.t || "", pv.fmt, 45000)) return;
   }
   const pbx = kind === "mp3" || kind === "btch" ? { ok: false, err: "" } : await pbYtEx(env, e.u, kind);
   const pb = pbx.ok ? pbx : null;
   if (pb) {
     await ytCachePut(env, vid, kind, { u: pb.u, host: "puruboy", t: pb.t || e.t || "", sz: pb.sz, fmt: pb.fmt, exp: "" });
     const upTok = rndTok();
-    try { await putJSON(env, YT_UP_PREFIX + upTok, { c: chatId, u: pb.u, k: kind, t: pb.t || e.t || "", f: pb.fmt, exp: Date.now() + DL_SAV_TTL_MS }, env.DB ? { ttlMs: DL_SAV_TTL_MS } : undefined); } catch (_) {}
+    try { await putJSON(env, YT_UP_PREFIX + upTok, { c: chatId, u: pb.u, k: kind, t: pb.t || e.t || "", f: pb.fmt, sz: pb.sz || 0, exp: Date.now() + DL_SAV_TTL_MS }, env.DB ? { ttlMs: DL_SAV_TTL_MS } : undefined); } catch (_) {}
     const card = await ytLinkCard(env, chatId, L, wmid, pb.u, kind, pb.t || e.t || "", pb.sz || 0, { fmt: pb.fmt }, upTok);
     if (card) return;
   }
@@ -1766,6 +1806,9 @@ export async function handleYtBuild(env, cbId, chatId, mid, arg) {
     // through to the confirmed GitHub build instead of handing over a dead link.
     const a = await btchAudio(env, e.u);
     if (a && await ytUploadResolved(env, chatId, L, wmid, a.u, "mp3", a.t || e.t || "", "MP3", 30000)) return;
+    // No audio-only source is alive, but the muxed mp4 carries the audio track — send that as audio.
+    const pv = await pbYtEx(env, e.u, "144");
+    if (pv.ok && await ytSendAsAudio(env, chatId, L, wmid, pv.u, pv.t || e.t || "", pv.dur, "M4A", 45000)) return;
   }
   // Resolver is out: ask before spending a GitHub Actions run — never dispatch on our own.
   const gtok = rndTok();
@@ -1797,7 +1840,11 @@ export async function handleYtGha(env, cbId, chatId, mid, arg) {
   // MP3 builds must not touch YouTube from the runner (yt-dlp is bot-walled there): hand the
   // builder the resolver's mp4 proxy instead and let ffmpeg strip the video track.
   let src = "";
-  if (kind === "mp3") { const v = await btchYt(env, e.u, "video"); src = v ? v.u : ""; }
+  if (kind === "mp3") {
+    const p = await pbYtEx(env, e.u, "144"); // the resolver's mp4 is the source that actually loads
+    src = p.ok ? p.u : "";
+    if (!src) { const v = await btchYt(env, e.u, "video"); src = v ? v.u : ""; }
+  }
   let err = "";
   try {
     const r = await fetch("https://api.github.com/repos/" + repo + "/dispatches", {
