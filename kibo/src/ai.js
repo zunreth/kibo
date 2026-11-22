@@ -131,6 +131,14 @@ import { animeLookup } from './feat-ctx.js';
 import {
   decodeEnt,
 } from './feat-rss.js';
+import {
+  agentReminders,
+  agentStatus,
+  agentJournal,
+  agentHabits,
+  agentExpense,
+  agentCountdown,
+} from './feat-agent.js';
 
 export const TOOLS_AGENT = [
   { type: "function", function: { name: "web_search", description: "Search the live web (news, prices, schedules, fresh facts). Use it when your knowledge might be stale.", parameters: { type: "object", properties: { query: { type: "string", description: "search keywords" } }, required: ["query"] } } },
@@ -141,7 +149,13 @@ export const TOOLS_AGENT = [
   { type: "function", function: { name: "anime_lookup", description: "Look up anime, manga, or characters (live data via Kitsu). Use it when the user asks about anime/manga titles, characters, the current season, or popularity charts.", parameters: { type: "object", properties: { kind: { type: "string", enum: ["anime", "manga", "char", "season", "top", "random"], description: "what to look up" }, q: { type: "string", description: "search query (title or character name); only needed for anime/manga/char" } }, required: ["kind"] } } },
   { type: "function", function: { name: "mark_quest", description: "Mark TODAY'S daily quest as done or skipped. Use it when the user says they completed the daily quest (or asks to skip it).", parameters: { type: "object", properties: { status: { type: "string", enum: ["done", "skip"], description: "the new quest status" } }, required: ["status"] } } },
   { type: "function", function: { name: "mark_sidequest", description: "Resolve the side quest you gave earlier as done or skipped, when the user says they finished it (or asks to skip).", parameters: { type: "object", properties: { status: { type: "string", enum: ["done", "skip"] } }, required: ["status"] } } },
-  { type: "function", function: { name: "new_sidequest", description: "Record a NEW side quest the user asked for (a small bonus quest). The text is recorded by the system and re-posted to the user.", parameters: { type: "object", properties: { text: { type: "string", description: "short quest text" } }, required: ["text"] } } }
+  { type: "function", function: { name: "new_sidequest", description: "Record a NEW side quest the user asked for (a small bonus quest). The text is recorded by the system and re-posted to the user.", parameters: { type: "object", properties: { text: { type: "string", description: "short quest text" } }, required: ["text"] } } },
+  { type: "function", function: { name: "reminders", description: "The user's reminders. action='list' returns every active reminder with its id and time. action='del' cancels one — pass id, or match=a chunk of its text. Always list first when the user is vague about which one.", parameters: { type: "object", properties: { action: { type: "string", enum: ["list", "del"], description: "what to do" }, id: { type: "integer", description: "reminder id (for del)" }, match: { type: "string", description: "text to match when the id is unknown (for del)" } }, required: ["action"] } } },
+  { type: "function", function: { name: "my_status", description: "One snapshot of the user's life data: level/XP, points, today's daily quest + streak/shields, open side quests, active reminders, last night's sleep, habits done today, money spent this month, journal activity, upcoming countdowns. Call it before answering anything like 'how am I doing', 'what's pending', 'how much did I spend'.", parameters: { type: "object", properties: {} } } },
+  { type: "function", function: { name: "journal", description: "The user's private journal. action='read' returns the latest entries (count=how many, default 3). action='write' appends an entry the user just dictated — keep their words and their #feeling tags.", parameters: { type: "object", properties: { action: { type: "string", enum: ["read", "write"], description: "what to do" }, text: { type: "string", description: "the entry (for write)" }, count: { type: "integer", description: "how many entries to read (default 3, max 10)" } }, required: ["action"] } } },
+  { type: "function", function: { name: "habits", description: "The user's habit tracker. action='list' shows every habit with today's tick and streak. action='check' ticks one off for today and awards points — pass name (part of the habit name) or id.", parameters: { type: "object", properties: { action: { type: "string", enum: ["list", "check"], description: "what to do" }, name: { type: "string", description: "habit name or id (for check)" } }, required: ["action"] } } },
+  { type: "function", function: { name: "log_expense", description: "Record money the user spent. amount in rupiah, plain number (25000) or short form ('25k'). note = what it was for. Use it whenever the user mentions paying/buying something.", parameters: { type: "object", properties: { amount: { type: "string", description: "how much, e.g. 25000 or 25k" }, note: { type: "string", description: "what for, e.g. 'kopi'" } }, required: ["amount"] } } },
+  { type: "function", function: { name: "countdown", description: "The days-until list (birthdays, deadlines, releases). action='list'; action='add' with name + date as YYYY-MM-DD; action='del' with id.", parameters: { type: "object", properties: { action: { type: "string", enum: ["list", "add", "del"], description: "what to do" }, name: { type: "string", description: "what it is (for add)" }, date: { type: "string", description: "YYYY-MM-DD (for add)" }, id: { type: "integer", description: "countdown id (for del)" } }, required: ["action"] } } }
 ];
 
 export function ddgHost(u) {
@@ -321,11 +335,18 @@ export async function execTool(env, name, argsJson, chatId) {
     const ok = await sideQuestNew(env, chatId || parseInt((await env.KV.get("owner_chat")) || "0", 10), t);
     return ok ? "side quest recorded and re-posted to the user" : "error: could not record the side quest (slots may be full) — say so honestly WITHOUT any marker";
   }
+  if (name === "reminders") return agentReminders(env, chatId || parseInt((await env.KV.get("owner_chat")) || "0", 10), a);
+  if (name === "my_status") return agentStatus(env);
+  if (name === "journal") return agentJournal(env, a);
+  if (name === "habits") return agentHabits(env, a);
+  if (name === "log_expense") return agentExpense(env, a);
+  if (name === "countdown") return agentCountdown(env, a);
   if (name === "open_url" || (!q && url)) {
     if (!url) return "error: url is empty";
     const t = await fetchPageText(url);
     return t ? t.slice(0, 6000) : "couldn't open that page";
   }
+  if (name !== "web_search") return "error: unknown tool \"" + name + "\" — do not call it again; answer from what you have";
   if (!q) return "error: query is empty";
   const out = await webSearch(env, q);
   if (!out) return "search tool returned nothing (providers may be temporarily blocked). DO NOT call web_search again — answer directly from your knowledge and mention the data may be stale. If the user named a specific site (wiki, docs, etc.), the open_url tool is still worth a try.";
@@ -348,6 +369,17 @@ export function toolLabel(name, argsJson, L) {
     const k = a.kind || "anime";
     const lbl = { manga: L.tlManga, char: L.tlChar, season: L.tlSeason, top: L.tlTop, random: L.tlRandom }[k] || L.tlAnime;
     return lbl + (a.q || (k === "season" || k === "top" || k === "random" ? "" : "?"));
+  }
+  if (name === "reminders") return String(a.action || "list").toLowerCase() === "del" ? L.tlRemDel + (a.id || a.match || "?") : L.tlRemList;
+  if (name === "my_status") return L.tlStatus;
+  if (name === "journal") return String(a.action || "read").toLowerCase() === "write" ? L.tlJournalW : L.tlJournalR;
+  if (name === "habits") return String(a.action || "list").toLowerCase() === "check" ? L.tlHabitChk + (a.name || a.id || "?") : L.tlHabitList;
+  if (name === "log_expense") return L.tlExpense + (a.amount || "?") + (a.note ? " \u2014 " + a.note : "");
+  if (name === "countdown") {
+    const act = String(a.action || "list").toLowerCase();
+    if (act === "del") return L.tlCdDel + (a.id || "?");
+    if (act === "add") return L.tlCdAdd + (a.name || "?") + (a.date ? " \u2014 " + a.date : "");
+    return L.tlCdList;
   }
   let q = a.query || a.q || a.keywords || "";
   if (Array.isArray(q)) q = q.join(" ");

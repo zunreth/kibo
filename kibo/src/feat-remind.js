@@ -352,16 +352,24 @@ export async function sideQuestResolve(env, chatId, act) {
   return true;
 }
 
+export async function journalAdd(env, body) {
+  const text = String(body || "").trim();
+  if (!text) return { ok: false, why: "empty" };
+  const arr = await getJSON(env, "journal", []);
+  const moods = [...text.matchAll(/#([\p{L}\p{N}_]+)/gu)].map(m => m[1].toLowerCase()).slice(0, 5);
+  arr.push({ ts: Date.now(), text: text, moods: moods });
+  while (arr.length > 1000) arr.shift();
+  await putJSON(env, "journal", arr);
+  return { ok: true, moods, n: arr.length };
+}
+
 export async function handleJournal(env, msg, chatId) {
   const L = await uiLang(env);
   const body = (msg.text || "").replace(/^\/\S+\s*/, "").trim();
   if (!body) { await reply(env, chatId, L.jUsage); return; }
-  const arr = await getJSON(env, "journal", []);
-  const moods = [...body.matchAll(/#([\p{L}\p{N}_]+)/gu)].map(m => m[1].toLowerCase()).slice(0, 5);
-  arr.push({ ts: Date.now(), text: body, moods: moods });
-  while (arr.length > 1000) arr.shift();
-  await putJSON(env, "journal", arr);
-  await notify(env, chatId, L.jSaved(fmtWIB(Math.floor(Date.now() / 1000), L)) + (moods.length ? L.jMood + moods.map(t => "#" + t).join(" ") : ""));
+  const r = await journalAdd(env, body);
+  if (!r.ok) { await reply(env, chatId, L.jUsage); return; }
+  await notify(env, chatId, L.jSaved(fmtWIB(Math.floor(Date.now() / 1000), L)) + (r.moods.length ? L.jMood + r.moods.map(t => "#" + t).join(" ") : ""));
 }
 
 function memNorm(s) {

@@ -209,15 +209,17 @@ export async function handleHabit(env, msg, chatId) {
   }
   return reply(env, chatId, L.hHow);
 }
-export async function handleHabitCb(env, chatId, mid, arg) {
-  const L = await uiLang(env);
-  const sec = nowS();
+export async function habitCheck(env, idOrName, atSec) {
+  const sec = atSec || nowS();
   const today = dayWIB(sec), yesterday = dayWIB(sec - 86400);
   const arr = (await getJSON(env, HABITS_KEY, [])).filter(h => h && h.name);
   await habitsResetLazy(env, arr, today, yesterday, wkOf(sec));
-  const h = arr.find(x => String(x.id) === String(arg));
-  if (!h) return L.hGone;
-  if (h.last_done === today) return L.hAlr;
+  const want = String(idOrName == null ? "" : idOrName).trim().toLowerCase();
+  const h = arr.find(x => String(x.id) === String(idOrName))
+    || (want ? arr.find(x => String(x.name).toLowerCase() === want) : null)
+    || (want ? arr.find(x => String(x.name).toLowerCase().includes(want)) : null);
+  if (!h) return { ok: false, why: "gone" };
+  if (h.last_done === today) return { ok: false, why: "already", name: h.name, streak: h.streak || 0 };
   let bonus = 0, wkHit = false;
   if (h.tgt) {
     const before = h.wkc || 0;
@@ -233,13 +235,23 @@ export async function handleHabitCb(env, chatId, mid, arg) {
   if (wkHit) {
     await lifeNote(env, "hit this week's target for the habit '" + h.name + "' (" + h.wkc + "/" + h.tgt + " this week, " + h.streak + "-week streak)");
     if (HABIT_WK_MS.includes(h.streak)) await lifeNote(env, "the habit '" + h.name + "' reached a " + h.streak + "-week streak");
-    await reactTail(env, chatId, await lifeMsg(env, "the user just hit this week's target for their habit '" + h.name + "' (" + h.wkc + "/" + h.tgt + ", week streak " + h.streak + ")", "the user completed their weekly habit target: big warm hype, one line."));
   } else {
     if (HABIT_MS.includes(h.streak)) await lifeNote(env, "the habit '" + h.name + "' reached a " + h.streak + "-day streak");
-    await reactTail(env, chatId, await lifeMsg(env, "the user checked in on their habit '" + h.name + "' (streak now " + h.streak + " day" + (h.streak === 1 ? "" : "s") + ")", "the user did their habit check-in: short hype, the streak is alive, one line."));
+  }
+  return { ok: true, name: h.name, streak: h.streak || 0, wkc: h.wkc || 0, tgt: h.tgt || 0, wkHit, pts: HABIT_PTS + bonus };
+}
+
+export async function handleHabitCb(env, chatId, mid, arg) {
+  const L = await uiLang(env);
+  const r = await habitCheck(env, arg);
+  if (!r.ok) return r.why === "already" ? L.hAlr : L.hGone;
+  if (r.wkHit) {
+    await reactTail(env, chatId, await lifeMsg(env, "the user just hit this week's target for their habit '" + r.name + "' (" + r.wkc + "/" + r.tgt + ", week streak " + r.streak + ")", "the user completed their weekly habit target: big warm hype, one line."));
+  } else {
+    await reactTail(env, chatId, await lifeMsg(env, "the user checked in on their habit '" + r.name + "' (streak now " + r.streak + " day" + (r.streak === 1 ? "" : "s") + ")", "the user did their habit check-in: short hype, the streak is alive, one line."));
   }
   if (mid) await editHabitView(env, chatId, mid);
-  return wkHit ? L.hDonePopW(h.streak || 0, h.wkc, h.tgt, HABIT_PTS, bonus) : L.hDonePop(h.streak || 0, HABIT_PTS);
+  return r.wkHit ? L.hDonePopW(r.streak, r.wkc, r.tgt, HABIT_PTS, r.pts - HABIT_PTS) : L.hDonePop(r.streak, HABIT_PTS);
 }
 async function editHabitView(env, chatId, mid) {
   try { const v = await habitView(env); await tg(env, "editMessageText", { chat_id: chatId, message_id: mid, text: v.text, parse_mode: "HTML", reply_markup: v.markup }); } catch (_) {}
@@ -282,6 +294,19 @@ export async function handleBeli(env, msg, chatId) {
   const { total } = mtdOf(arr, mon);
   return reply(env, chatId, L.bOk(rp(amt), note ? esc(note) : "-", rp(total)));
 }
+
+export async function expenseAdd(env, amtTok, note) {
+  const amt = parseAmt(String(amtTok == null ? "" : amtTok).replace(/[^\d.,k rbK RB]/gi, ""));
+  if (amt === null) return { ok: false, why: "bad" };
+  const arr = (await getJSON(env, EXP_KEY, [])).filter(e => e && typeof e.amt === "number");
+  arr.unshift({ ts: Date.now(), amt, note: String(note || "").trim().slice(0, EXP_NOTE_CAP) });
+  while (arr.length > EXP_MAX) arr.pop();
+  await putJSON(env, EXP_KEY, arr);
+  const { rows, total } = mtdOf(arr, monWIB(nowS()));
+  return { ok: true, amt, note: String(note || "").trim().slice(0, EXP_NOTE_CAP), total, n: rows.length };
+}
+
+export { dayWIB, monWIB, rp };
 
 export async function handleCapsule(env, msg, chatId) {
   const L = await uiLang(env);
