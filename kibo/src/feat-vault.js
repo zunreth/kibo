@@ -275,8 +275,7 @@ export function renderFiles(list, L, page) {
   rows.push([{ text: L.bFilesDel, callback_data: "vdel" }, { text: L.bFilesRen, callback_data: "vren2" }]);
   const pnav = [];
   if (page > 0) pnav.push({ text: "\u2B05\uFE0F", callback_data: "files:" + (page - 1) });
-  pnav.push({ text: "\u{1F504}", callback_data: "files:" + page });
-  if (pages > 1) pnav.push({ text: (page + 1) + "/" + pages, callback_data: "vpage" });
+  pnav.push({ text: "\u{1F504}" + (pages > 1 ? " " + (page + 1) + "/" + pages : ""), callback_data: "files:" + page });
   if (page < pages - 1) pnav.push({ text: "\u27A1\uFE0F", callback_data: "files:" + (page + 1) });
   if (pnav.length) rows.push(pnav);
   rows.push(nav);
