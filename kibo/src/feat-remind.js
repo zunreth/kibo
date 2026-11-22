@@ -89,6 +89,7 @@ import {
   nukeGone,
   nukeSleep,
 } from './base.js';
+import { mutateJSON } from './once.js';
 import {
   STAMP_LAST,
   stampAlive,
@@ -355,11 +356,14 @@ export async function sideQuestResolve(env, chatId, act) {
 export async function journalAdd(env, body) {
   const text = String(body || "").trim();
   if (!text) return { ok: false, why: "empty" };
-  const arr = await getJSON(env, "journal", []);
   const moods = [...text.matchAll(/#([\p{L}\p{N}_]+)/gu)].map(m => m[1].toLowerCase()).slice(0, 5);
-  arr.push({ ts: Date.now(), text: text, moods: moods });
-  while (arr.length > 1000) arr.shift();
-  await putJSON(env, "journal", arr);
+  const rec = { ts: Date.now(), text: text, moods: moods };
+  const arr = await mutateJSON(env, "journal", [], cur => {
+    const list = Array.isArray(cur) ? cur : [];
+    const next = list.concat([rec]);
+    while (next.length > 1000) next.shift();
+    return { val: next, okNow: back => Array.isArray(back) && back.some(e => e && e.ts === rec.ts) };
+  });
   return { ok: true, moods, n: arr.length };
 }
 
@@ -499,13 +503,17 @@ export async function addReminder(env, chatId, spec, text, recInfo) {
   const nowSec = Math.floor(Date.now() / 1000);
   const target = recInfo ? recInfo.target : parseRemind(String(spec || ""), nowSec);
   if (!target) return null;
-  const id = parseInt((await env.KV.get("rem_seq")) || "0", 10) + 1;
-  await env.KV.put("rem_seq", String(id));
-  const obj = await getJSON(env, "reminders", {});
-  obj[id] = { at: target, chat: chatId, text: String(text || "").slice(0, 300), done: false };
-  if (recInfo) obj[id].rec = recInfo.rec;
-  await putJSON(env, "reminders", obj);
-  return { id: id, at: target };
+  let made = null;
+  await mutateJSON(env, "reminders", {}, cur => {
+    const obj = cur && typeof cur === "object" ? cur : {};
+    const id = Object.keys(obj).reduce((mx, k) => Math.max(mx, parseInt(k, 10) || 0), 0) + 1;
+    const r = { at: target, chat: chatId, text: String(text || "").slice(0, 300), done: false };
+    if (recInfo) r.rec = recInfo.rec;
+    obj[id] = r;
+    made = { id: id, at: target };
+    return { val: obj, okNow: back => !!(back && back[id]) };
+  });
+  return made;
 }
 
 export function parseRec(kindName, hh, mm, nowSec) {
@@ -909,50 +917,79 @@ export async function remindMsg(env, id, text, nagLevel, mode) {
 export async function runCron(env) {
   const L = await uiLang(env);
   const nowSec = Math.floor(Date.now() / 1000);
-  const obj = await getJSON(env, "reminders", {});
-  let changed = false;
+  const ids = Object.keys(await getJSON(env, "reminders", {}));
   const alive = parseInt((await env.KV.get("last_user_msg")) || "0", 10);
-  for (const id of Object.keys(obj)) {
-    const r = obj[id];
-    if (!r || r.done || r.at > nowSec) continue;
-    if (r.rec) {
-
-      changed = true;
-      await reply(env, r.chat, "\u{1F501} <b>REMINDER #" + id + "</b> (" + esc(recLabelOf(r, L)) + ")\n" + esc(r.text));
-      const ai = await remindMsg(env, id, r.text, 0);
-      if (ai) await reply(env, r.chat, mdTg(esc(ai)));
-      const step = r.rec.kind === "daily" ? 86400 : 7 * 86400;
-      let next = r.at + step;
-      while (next <= nowSec) next += step;
-      r.at = next;
-      continue;
-    }
-    if (r.fired_ts === undefined) {
-
-      r.fired_ts = nowSec;
-      r.nags = 0;
-      changed = true;
-      await reply(env, r.chat, "\u23F0 <b>REMINDER #" + id + "</b>\n" + esc(r.text));
-      const ai = await remindMsg(env, id, r.text, 0);
-      if (ai) await reply(env, r.chat, mdTg(esc(ai)));
-      continue;
-    }
-
-    if (alive >= r.fired_ts) { r.done = true; changed = true; continue; }
-    if (r.nags < NAG_AT.length && nowSec - r.fired_ts < NAG_AT[r.nags]) continue;
-    changed = true;
-    if (r.nags < NAG_AT.length - 1) {
-
-      r.nags++;
-      const ai = await remindMsg(env, id, r.text, r.nags);
-      await reply(env, r.chat, ai ? mdTg(esc(ai)) : L.nagMsg(id, esc(r.text)));
-    } else {
-
+  for (const id of ids) {
+    let act = null;
+    await mutateJSON(env, "reminders", {}, cur => {
+      const obj = cur && typeof cur === "object" ? cur : {};
+      const r = obj[id];
+      if (!r || r.done || r.at > nowSec) return null;
+      if (r.rec) {
+        const step = r.rec.kind === "daily" ? 86400 : 7 * 86400;
+        let next = r.at + step;
+        while (next <= nowSec) next += step;
+        const at = r.at;
+        r.at = next;
+        act = { kind: "rec", rec: r.rec, text: r.text, chat: r.chat, at: at };
+        return { val: obj, okNow: back => !!(back && back[id] && back[id].at === next) };
+      }
+      if (r.fired_ts === undefined) {
+        r.fired_ts = nowSec;
+        r.nags = 0;
+        act = { kind: "first", text: r.text, chat: r.chat, id: id };
+        return { val: obj, okNow: back => !!(back && back[id] && back[id].fired_ts === nowSec) };
+      }
+      if (alive >= r.fired_ts) {
+        r.done = true;
+        return { val: obj, okNow: back => !!(back && back[id] && back[id].done) };
+      }
+      if (r.nags < NAG_AT.length && nowSec - r.fired_ts < NAG_AT[r.nags]) return null;
+      if (r.nags < NAG_AT.length - 1) {
+        r.nags++;
+        const nags = r.nags;
+        act = { kind: "nag", text: r.text, chat: r.chat, id: id, nags: nags };
+        return { val: obj, okNow: back => !!(back && back[id] && back[id].nags === nags) };
+      }
       r.done = true;
-      await reply(env, r.chat, L.nagClose(esc(r.text)));
+      act = { kind: "close", text: r.text, chat: r.chat, id: id };
+      return { val: obj, okNow: back => !!(back && back[id] && back[id].done) };
+    });
+    if (!act) continue;
+    const push = async (chat, text) => {
+      try { const j = await reply(env, chat, text); return { delivered: !!(j && j.ok), threw: false }; }
+      catch (_) { return { delivered: false, threw: true }; }
+    };
+    const talk = async () => {
+      try { return await remindMsg(env, id, act.text, act.kind === "nag" ? act.nags : 0); } catch (_) { return ""; }
+    };
+    let res;
+    if (act.kind === "rec") {
+      res = await push(act.chat, "\u{1F501} <b>REMINDER #" + id + "</b> (" + esc(recLabelOf(act, L)) + ")\n" + esc(act.text));
+      if (res.delivered) { const ai = await talk(); if (ai) await push(act.chat, mdTg(esc(ai))); }
+    } else if (act.kind === "first") {
+      res = await push(act.chat, "\u23F0 <b>REMINDER #" + id + "</b>\n" + esc(act.text));
+      if (res.delivered) { const ai = await talk(); if (ai) await push(act.chat, mdTg(esc(ai))); }
+    } else if (act.kind === "nag") {
+      const ai = await talk();
+      res = await push(act.chat, ai ? mdTg(esc(ai)) : L.nagMsg(id, esc(act.text)));
+    } else {
+      res = await push(act.chat, L.nagClose(esc(act.text)));
+    }
+    if (!res.delivered && res.threw) {
+      await mutateJSON(env, "reminders", {}, back => {
+        const obj = back && typeof back === "object" ? back : {};
+        const r = obj[id];
+        if (!r) return null;
+        if (act.kind === "first" && r.fired_ts === nowSec) { delete r.fired_ts; r.nags = 0; }
+        else if (act.kind === "nag" && r.nags === act.nags) { r.nags = Math.max(0, act.nags - 1); }
+        else if (act.kind === "close" && r.done) { r.done = false; }
+        else if (act.kind === "rec" && r.at !== act.at) { r.at = act.at; }
+        else return null;
+        return { val: obj, okNow: () => true };
+      });
     }
   }
-  if (changed) await putJSON(env, "reminders", obj);
 
   await vaultAutoBackup(env, nowSec);
   const d = new Date(nowSec * 1000);

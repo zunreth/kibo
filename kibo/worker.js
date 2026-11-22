@@ -118,6 +118,7 @@ import {
   bumpCmd,
 } from './src/kv.js';
 import { wrapStore, d1Sweep, shadowSync } from './src/store-d1.js';
+import { seenUpdate, cronLock, cronUnlock } from './src/once.js';
 import { handleNotify } from './src/feat-notify.js';
 import { handleDebug, handleDbgFlag, dbgLog, renderDebugView, renderLogView, setDebug, clearDbgRing, armStream } from './src/feat-debug.js';
 import { handleChain, chainStartCb, chainQuitCb, chainQuit2Cb, chainViewCb } from './src/feat-chain.js';
@@ -389,6 +390,8 @@ export default {
     const isProbe = request.headers.get("x-zb-probe") === "1";
     const runEnv = isProbe ? Object.assign(Object.create(env), { __probe: [] }) : env;
 
+    if (!isProbe && await seenUpdate(runEnv, update)) return new Response("ok", { status: 200 });
+
     const p = handleUpdate(update, runEnv).catch(e => onUpdErr(runEnv, e));
     ctx.waitUntil(p);
     let toId = null;
@@ -405,6 +408,7 @@ export default {
     setLiveCtx(ctx);
     try { if (!env.__kvw) { env.KV = wrapStore(env); env.__kvw = true; } } catch (_) {}
     ctx.waitUntil((async () => {
+      if (!(await cronLock(env))) return;
       let allOk = true;
       const beat = async (name, p) => {
         try {
@@ -426,6 +430,7 @@ export default {
         beat("todo", todoCron(env, Math.floor(Date.now() / 1000)).catch(() => {}))
       ]);
       await hcPing(env, allOk);
+      await cronUnlock(env);
     })());
   }
 };

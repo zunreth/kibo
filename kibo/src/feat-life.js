@@ -15,6 +15,7 @@ import {
   EXP_BUDGET_KEY, EXP_CAT_DEFAULT, EXP_CAT_CAP, FOCUS_LOG_KEY, FOCUS_LOG_MAX,
 } from './consts.js';
 import { getJSON, putJSON, reply, notify, esc, mdTg, tg, delCmd } from './base.js';
+import { mutateJSON } from './once.js';
 import { uiLang, fmtWIB, UI_SEP } from './ui.js';
 import { addPts, parseRemind, remindMsg } from './feat-remind.js';
 import { getActiveCard } from './feat-chars.js';
@@ -421,13 +422,15 @@ export async function handleBeli(env, msg, chatId) {
 export async function expenseAdd(env, amtTok, note) {
   const amt = parseAmt(String(amtTok == null ? "" : amtTok).replace(/[^\d.,k rbK RB]/gi, ""));
   if (amt === null) return { ok: false, why: "bad" };
-  const arr = (await getJSON(env, EXP_KEY, [])).filter(e => e && typeof e.amt === "number");
   const parsed = splitCat(note);
   const rec = { ts: Date.now(), amt, note: parsed.note.slice(0, EXP_NOTE_CAP) };
   if (parsed.cat) rec.cat = parsed.cat;
-  arr.unshift(rec);
-  while (arr.length > EXP_MAX) arr.pop();
-  await putJSON(env, EXP_KEY, arr);
+  const arr = await mutateJSON(env, EXP_KEY, [], cur => {
+    const list = Array.isArray(cur) ? cur.filter(e => e && typeof e.amt === "number") : [];
+    const next = [rec].concat(list);
+    while (next.length > EXP_MAX) next.pop();
+    return { val: next, okNow: back => Array.isArray(back) && back.some(e => e && e.ts === rec.ts && e.amt === rec.amt) };
+  });
   const sum = expSummary(arr, monWIB(nowS()), await expBudget(env));
   return { ok: true, amt, note: rec.note, cat: parsed.cat || EXP_CAT_DEFAULT, total: sum.total, n: sum.rows.length, left: sum.left, cap: sum.cap };
 }

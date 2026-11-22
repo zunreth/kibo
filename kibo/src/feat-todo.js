@@ -1,6 +1,7 @@
 
 import { TODO_KEY, TODO_MAX, TODO_TEXT_CAP, WIB } from './consts.js';
 import { getJSON, putJSON, reply, notify, esc, tg } from './base.js';
+import { mutateJSON } from './once.js';
 import { uiLang, fmtWIB, UI_SEP } from './ui.js';
 import { parseRemind } from './feat-remind.js';
 
@@ -233,16 +234,24 @@ export async function handleTodoCb(env, chatId, mid, arg) {
 
 export async function todoCron(env, atSec) {
   const sec = atSec || nowS();
-  const arr = await todoList(env);
-  let changed = false;
   const L = await uiLang(env);
-  for (const t of arr) {
-    if (t.done || !t.due || t.fired || t.due > sec) continue;
-    t.fired = sec;
-    changed = true;
-    const owner = parseInt((await env.KV.get("owner_chat")) || "0", 10);
-    if (owner) await notify(env, owner, L.tdPing(esc(t.text), t.id));
+  const owner = parseInt((await env.KV.get("owner_chat")) || "0", 10);
+  const ids = (await todoList(env)).map(t => t.id);
+  let fired = 0;
+  for (const id of ids) {
+    let ping = null;
+    await mutateJSON(env, TODO_KEY, [], cur => {
+      const arr = Array.isArray(cur) ? cur : [];
+      const t = arr.find(x => x && x.id === id);
+      if (!t || t.done || !t.due || t.fired || t.due > sec) return null;
+      t.fired = sec;
+      ping = { id: id, text: t.text };
+      return { val: arr, okNow: back => Array.isArray(back) && !!back.find(x => x && x.id === id && x.fired === sec) };
+    });
+    if (!ping) continue;
+    fired++;
+    if (owner) await notify(env, owner, L.tdPing(esc(ping.text), ping.id));
   }
-  if (changed) await putJSON(env, TODO_KEY, arr);
-  return changed;
+  return fired > 0;
 }
+
