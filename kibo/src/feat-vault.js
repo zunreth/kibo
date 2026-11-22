@@ -281,7 +281,8 @@ export function renderFiles(list, L, page) {
   if (pnav.length) rows.push(pnav);
   rows.push(nav);
   const lines = list.slice(page * PER, page * PER + PER).map(f => "#" + f.id + " " + esc(f.name) + " \u00b7 " + fmtSize(f.size)).join("\n");
-  return { text: L.filesTitle + list.length + (pages > 1 ? " \u00b7 hal " + (page + 1) + "/" + pages : "") + L.filesHint + UI_SEP + lines, markup: { inline_keyboard: rows } };
+  const head = L.filesTitle + L.filesCount(list.length) + (pages > 1 ? L.filesPage(page + 1, pages) : "") + "</b>";
+  return { text: head + L.filesHint + UI_SEP + lines, markup: { inline_keyboard: rows } };
 }
 
 export async function handleFilesCmd(env, msg, chatId, kw, page) {

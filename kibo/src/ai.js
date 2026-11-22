@@ -220,7 +220,7 @@ export async function ddgLite(q) {
   const reS = /class=['"][^'"]*result-snippet[^'"]*['"][^>]*>([\s\S]*?)<\/td>/gi;
   while ((m = reS.exec(html)) && snippets.length < 8) snippets.push(decodeEnt(m[1].replace(/<[^>]+>/g, " ")).replace(/\s+/g, " ").trim());
   if (!links.length) return "";
-  return links.slice(0, 5).map((l, i) => (i + 1) + ". " + (l.title || "(tanpa judul)") + "\n   " + l.url + (snippets[i] ? "\n   " + snippets[i].slice(0, 200) : "")).join("\n");
+  return links.slice(0, 5).map((l, i) => (i + 1) + ". " + (l.title || "(untitled)") + "\n   " + l.url + (snippets[i] ? "\n   " + snippets[i].slice(0, 200) : "")).join("\n");
 }
 
 export async function newsRSS(q) {
@@ -271,7 +271,7 @@ export async function ddgHtml(q) {
   const reS = /class=['"][^'"]*result__snippet[^'"]*['"][^>]*>([\s\S]*?)<\/a>/gi;
   while ((m = reS.exec(html)) && snippets.length < 8) snippets.push(decodeEnt(m[1].replace(/<[^>]+>/g, " ")).replace(/\s+/g, " ").trim());
   if (!links.length) return "";
-  return links.slice(0, 5).map((l, i) => (i + 1) + ". " + (l.title || "(tanpa judul)") + "\n   " + l.url + (snippets[i] ? "\n   " + snippets[i].slice(0, 200) : "")).join("\n");
+  return links.slice(0, 5).map((l, i) => (i + 1) + ". " + (l.title || "(untitled)") + "\n   " + l.url + (snippets[i] ? "\n   " + snippets[i].slice(0, 200) : "")).join("\n");
 }
 
 export async function wikiSearch(q) {
@@ -293,14 +293,14 @@ export async function keyedSearch(env, q) {
       const j = await r.json().catch(() => null);
       const arr = (j && j.results) || [];
       if (!arr.length) return "";
-      return arr.slice(0, 5).map((x, i) => (i + 1) + ". " + (x.title || "(tanpa judul)") + "\n   " + (x.url || "") + (x.content ? "\n   " + String(x.content).replace(/\s+/g, " ").trim().slice(0, 200) : "")).join("\n") + "\n(hasil Tavily)";
+      return arr.slice(0, 5).map((x, i) => (i + 1) + ". " + (x.title || "(untitled)") + "\n   " + (x.url || "") + (x.content ? "\n   " + String(x.content).replace(/\s+/g, " ").trim().slice(0, 200) : "")).join("\n") + "\n(via Tavily)";
     }
     const r = await fetch("https://google.serper.dev/search", { method: "POST", headers: { "content-type": "application/json", "X-API-KEY": k }, signal: AbortSignal.timeout(15000), body: JSON.stringify({ q: q, num: 5 }) });
     if (!r.ok) return "";
     const j = await r.json().catch(() => null);
     const arr = (j && j.organic) || [];
     if (!arr.length) return "";
-    return arr.slice(0, 5).map((x, i) => (i + 1) + ". " + (x.title || "(tanpa judul)") + "\n   " + (x.link || "") + (x.snippet ? "\n   " + String(x.snippet).replace(/\s+/g, " ").trim().slice(0, 200) : "")).join("\n") + "\n(hasil Google/Serper)";
+    return arr.slice(0, 5).map((x, i) => (i + 1) + ". " + (x.title || "(untitled)") + "\n   " + (x.link || "") + (x.snippet ? "\n   " + String(x.snippet).replace(/\s+/g, " ").trim().slice(0, 200) : "")).join("\n") + "\n(via Google/Serper)";
   } catch (_) { return ""; }
 }
 

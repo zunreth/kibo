@@ -14,25 +14,25 @@ const timingSafeEq = (a, b) => {
 
 export async function handleNotify(request, env) {
   if (request.method !== "POST") return jr(405, { ok: false, err: "POST only" });
-  if (!env.NOTIFY_TOKEN) return jr(503, { ok: false, err: "notify disabled — NOTIFY_TOKEN belum diset" });
+  if (!env.NOTIFY_TOKEN) return jr(503, { ok: false, err: "notify disabled — NOTIFY_TOKEN is not set" });
   const auth = request.headers.get("authorization") || "";
   if (!timingSafeEq(auth, "Bearer " + env.NOTIFY_TOKEN)) return jr(401, { ok: false, err: "unauthorized" });
   let body = {};
-  try { body = await request.json(); } catch (_) { return jr(400, { ok: false, err: "body bukan JSON valid" }); }
+  try { body = await request.json(); } catch (_) { return jr(400, { ok: false, err: "body is not valid JSON" }); }
   const text = typeof body.text === "string" ? body.text.trim() : "";
-  if (!text || text.length > 1000) return jr(400, { ok: false, err: "text wajib ada, 1..1000 char" });
+  if (!text || text.length > 1000) return jr(400, { ok: false, err: "text is required, 1..1000 chars" });
   const owner = await env.KV.get("owner_chat");
-  if (!owner) return jr(503, { ok: false, err: "owner chat belum ada — /start dulu di TG" });
+  if (!owner) return jr(503, { ok: false, err: "no owner chat yet — run /start in TG first" });
   const title = typeof body.title === "string" ? body.title.trim().slice(0, 100) : "";
   const source = typeof body.source === "string" ? body.source.trim().slice(0, 40) : "";
   dbgLog(env, "notify", (source ? source + ": " : "") + text.slice(0, 80));
   const day = notifyDay();
   const rec = await getJSON(env, NOTIFY_DAY_KEY, null);
   const n = rec && rec.d === day ? rec.n || 0 : 0;
-  if (n >= NOTIFY_CAP) return jr(429, { ok: false, err: "daily cap " + NOTIFY_CAP + " notify terlampaui" });
+  if (n >= NOTIFY_CAP) return jr(429, { ok: false, err: "daily cap reached (" + NOTIFY_CAP + " notifies)" });
   const msg = (title ? "\uD83D\uDD14 <b>" + esc(title) + "</b>\n" : "\uD83D\uDD14 ") + (source ? "[" + esc(source) + "] " : "") + esc(text);
   const j = await tg(env, "sendMessage", { chat_id: owner, text: msg, parse_mode: "HTML" });
-  if (!j || !j.ok) return jr(502, { ok: false, err: "telegram gak nerima (delivery checked)" });
+  if (!j || !j.ok) return jr(502, { ok: false, err: "telegram did not accept it (delivery checked)" });
   await putJSON(env, NOTIFY_DAY_KEY, { d: day, n: n + 1 }, { ttlMs: 36 * 3600 * 1000 });
   return jr(200, { ok: true });
 }

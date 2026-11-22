@@ -183,7 +183,7 @@ export function wrapKV(env) {
       if (FV_MODE && FV_MODE.until <= Date.now()) { FV_MODE = null; fvDelete(env, FV_FLAG_KEY); }
       if (fvActive()) {
         const ok = await fvPut(env, k, val, opts);
-        if (!ok) throw new Error("KV failover PUT partner gagal — 10048 " + k);
+        if (!ok) throw new Error("KV failover PUT partner failed — 10048 " + k);
         return undefined;
       }
       try { return await prim.put(k, val, opts); }

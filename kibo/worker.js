@@ -480,7 +480,7 @@ async function handleUpdate(update, env) {
   if (cmd === "/j" || cmd === "/journal") return handleJournal(env, msg, chatId);
   if (cmd === "/digest") return sendDigest(env, chatId, false);
   if (cmd === "/remind") return handleRemind(env, msg, chatId);
-  if (cmd === "/reminds") return listReminders(env, chatId);
+  if (cmd === "/reminds" || cmd === "/reminders") return listReminders(env, chatId);
   if (cmd === "/del") return delReminder(env, msg, chatId);
   if (cmd === "/quest") {
     const qb = (msg.text || "").replace(/^\/\S+\s*/, "").trim().toLowerCase();
@@ -535,7 +535,7 @@ async function handleUpdate(update, env) {
   if (cmd === "/np") return handleNp(env, chatId);
   if (cmd === "/focus") { await delCmd(env, chatId, msg.message_id); return handleFocus(env, msg, chatId); }
   if (cmd === "/sleep") { await delCmd(env, chatId, msg.message_id); return handleSleep(env, msg, chatId); }
-  if (cmd === "/habit") { await delCmd(env, chatId, msg.message_id); return handleHabit(env, msg, chatId); }
+  if (cmd === "/habit" || cmd === "/habits") { await delCmd(env, chatId, msg.message_id); return handleHabit(env, msg, chatId); }
   if (cmd === "/beli") { await delCmd(env, chatId, msg.message_id); return handleBeli(env, msg, chatId); }
   if (cmd === "/exp") { await delCmd(env, chatId, msg.message_id); return handleBeli(env, Object.assign({}, msg, { text: "/beli" + text.slice(cmd.length) }), chatId); }
   if (cmd === "/shop") return handleShop(env, chatId, 0);
@@ -543,9 +543,9 @@ async function handleUpdate(update, env) {
   if (cmd === "/inv") return handleInv(env, chatId, 0);
   if (cmd === "/ach") return handleAch(env, chatId, 0);
   if (cmd === "/bm") { await delCmd(env, chatId, msg.message_id); return bmSave(env, msg, chatId, String(msg.text || "").replace(/^\/bm(@[A-Za-z0-9_]+)?/, "").trim()); }
-  if (cmd === "/capsule") { await delCmd(env, chatId, msg.message_id); return handleCapsule(env, msg, chatId); }
-  if (cmd === "/countdown") return handleCountdown(env, msg, chatId);
-  if (cmd === "/todo" || cmd === "/t") { await delCmd(env, chatId, msg.message_id); return handleTodo(env, msg, chatId); }
+  if (cmd === "/capsule" || cmd === "/capsules") { await delCmd(env, chatId, msg.message_id); return handleCapsule(env, msg, chatId); }
+  if (cmd === "/countdown" || cmd === "/countdowns") return handleCountdown(env, msg, chatId);
+  if (cmd === "/todo" || cmd === "/t" || cmd === "/todos") { await delCmd(env, chatId, msg.message_id); return handleTodo(env, msg, chatId); }
   if (cmd === "/c" || cmd === "/cape" || cmd === "/capture") { await delCmd(env, chatId, msg.message_id); return handleCapture(env, msg, chatId); }
   if (cmd === "/qr") { await delCmd(env, chatId, msg.message_id); return handleQr(env, msg, chatId); }
   if (cmd === "/ics") { await delCmd(env, chatId, msg.message_id); return handleIcs(env, chatId); }

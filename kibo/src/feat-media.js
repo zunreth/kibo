@@ -1064,7 +1064,7 @@ async function nhAlbumDeliver(env, chatId, L, id, title, numPages, pages, ctrlMi
   const mids = [];
   const chunks = [];
   for (let i = 0; i < pages.length; i += CH) chunks.push(pages.slice(i, i + CH));
-  const caps = title + (numPages ? " · " + numPages + " hal" : "");
+  const caps = title + (numPages ? L.nhPagesSuf(numPages) : "");
   let failed = 0;
   for (let ci = 0; ci < chunks.length; ci++) {
     const media = chunks[ci].map((p, i) => ({ type: "photo", media: p.url, caption: (ci === 0 && i === 0) ? caps : "" }));
@@ -1201,7 +1201,7 @@ export async function nhRun(env, chatId, idRaw, fmtRaw, extraRaw) {
   } catch (_) {}
   if (fmt === "album") {
     if (pages.length) return nhAlbumDeliver(env, chatId, L, id, title, numPages, pages, 0);
-    return reply(env, chatId, "⚠️ Album gagal dibuka (metadata dari Worker tidak tersedia). Coba lagi, atau pakai <code>/nh " + id + " zip</code> buat file.");
+    return reply(env, chatId, L.nhAlbumNoMeta(id));
   }
   if (fresh) await nhCacheDrop(env, id, fmt);
   else {
@@ -1210,7 +1210,7 @@ export async function nhRun(env, chatId, idRaw, fmtRaw, extraRaw) {
   }
   const url = nhDl(env, id, fmt);
   if (url) {
-    const j = await tg(env, "sendDocument", { chat_id: chatId, document: url, caption: title + (numPages ? " · " + numPages + " hal" : "") });
+    const j = await tg(env, "sendDocument", { chat_id: chatId, document: url, caption: title + (numPages ? L.nhPagesSuf(numPages) : "") });
     if (j && j.ok) return;
     return reply(env, chatId, L.nhFail(url));
   }
@@ -1272,7 +1272,7 @@ async function nhCacheDrop(env, id, fmt) {
 }
 async function nhCacheDeliver(env, chatId, L, id, fmt, e) {
   const n = Number(e.n) || 0;
-  const cap = "<b>📦 NH " + hesc(String(id)) + "</b> (" + hesc(String(fmt).slice(0, 12)) + (n ? " · " + n + " hal" : "") + ")" + (e.t ? " — " + hesc(String(e.t).slice(0, 90)) : "") + "\n<i>" + hesc(L.nhCacheTag) + "</i>";
+  const cap = "<b>📦 NH " + hesc(String(id)) + "</b> (" + hesc(String(fmt).slice(0, 12)) + (n ? L.nhPagesSuf(n) : "") + ")" + (e.t ? " — " + hesc(String(e.t).slice(0, 90)) : "") + "\n<i>" + hesc(L.nhCacheTag) + "</i>";
   const tok = rndTok();
   const kb = { inline_keyboard: [[{ text: L.nhSaveBtn, callback_data: "nhsave:" + tok }, { text: L.nhDlBtn, url: e.u }]] };
   const dj = await tg(env, "sendDocument", { chat_id: chatId, document: e.u, caption: cap, parse_mode: "HTML", reply_markup: kb });
@@ -1406,11 +1406,11 @@ export async function handleNhCb(request, env) {
     return jr(200, { ok: true });
   }
   const url = String(body.url || "").trim().slice(0, 500);
-  if (!/^https:\/\/\S+$/.test(url)) return jr(400, { ok: false, err: "url gak valid" });
+  if (!/^https:\/\/\S+$/.test(url)) return jr(400, { ok: false, err: "invalid url" });
   const bTitle = String(body.title || "").slice(0, 110);
   const bPages = parseInt(String(body.pages || ""), 10) || 0;
   const bWarn = String(body.warn || "").slice(0, 90);
-  const cap = "<b>📦 NH " + hesc(job.id) + "</b> (" + hesc(String(body.fmt || job.fmt || "zip").slice(0, 12)) + (bPages ? " · " + hesc(String(bPages).slice(0, 6)) + " hal" : "") + ")" + (bTitle ? " — " + hesc(bTitle.slice(0, 90)) : "") + (bWarn ? "\n<i>" + hesc(bWarn.slice(0, 80)) + "</i>" : "");
+  const cap = "<b>📦 NH " + hesc(job.id) + "</b> (" + hesc(String(body.fmt || job.fmt || "zip").slice(0, 12)) + (bPages ? L.nhPagesSuf(hesc(String(bPages).slice(0, 6))) : "") + ")" + (bTitle ? " — " + hesc(bTitle.slice(0, 90)) : "") + (bWarn ? "\n<i>" + hesc(bWarn.slice(0, 80)) + "</i>" : "");
   const stok = rndTok();
   const kb = { inline_keyboard: [[{ text: L.nhSaveBtn, callback_data: "nhsave:" + stok }, { text: L.nhDlBtn, url }]] };
   const dj = await tg(env, "sendDocument", { chat_id: job.chat, document: url, caption: cap, parse_mode: "HTML", reply_markup: kb });
@@ -1466,22 +1466,22 @@ async function nhSaveFile(env, cbId, chatId, L, e, vaultId) {
     }
   } catch (_) {}
   const ok = await nhIndexPush(env, { id: e.id, title, fid, kind, n: e.n || 0 });
-  try { await tg(env, "answerCallbackQuery", { callback_query_id: cbId, text: ok ? L.nhSaved : "gagal simpen ke vault" }); } catch (_) {}
+  try { await tg(env, "answerCallbackQuery", { callback_query_id: cbId, text: ok ? L.nhSaved : L.nhVaultSaveFail }); } catch (_) {}
 }
 
 export async function handleNhSave(env, cbId, chatId, tok) {
   const L = await uiLang(env);
   const e = await getJSON(env, NH_SAVE_PREFIX + tok, null);
   try { await env.KV.delete(NH_SAVE_PREFIX + tok); } catch (_) {}
-  if (!e || !e.id) { try { await tg(env, "answerCallbackQuery", { callback_query_id: cbId, text: "expired" }); } catch (_) {} return; }
+  if (!e || !e.id) { try { await tg(env, "answerCallbackQuery", { callback_query_id: cbId, text: L.nhExpired }); } catch (_) {} return; }
   const v = await getJSON(env, VAULT_CHAT_KEY, null);
   if (!v || !v.id) { try { await tg(env, "answerCallbackQuery", { callback_query_id: cbId, text: L.nhSaveNoVault }); } catch (_) {} return; }
   if (e.m) return nhSaveFile(env, cbId, chatId, L, e, v.id);
   const meta = await nhMeta(env, e.id);
   const pages = meta && Array.isArray(meta.pages) ? meta.pages : [];
   const title = (meta && meta.title) ? String(meta.title).slice(0, 110) : (e.t || "NH #" + e.id);
-  if (!pages.length) { try { await tg(env, "answerCallbackQuery", { callback_query_id: cbId, text: "gak bisa ambil halaman" }); } catch (_) {} return; }
-  try { await tg(env, "answerCallbackQuery", { callback_query_id: cbId, text: "menyimpan " + pages.length + " hal ke vault…" }); } catch (_) {}
+  if (!pages.length) { try { await tg(env, "answerCallbackQuery", { callback_query_id: cbId, text: L.nhVaultNoPages }); } catch (_) {} return; }
+  try { await tg(env, "answerCallbackQuery", { callback_query_id: cbId, text: L.nhVaultSaving(pages.length) }); } catch (_) {}
   const CH = 10, chunks = [];
   for (let i = 0; i < pages.length; i += CH) chunks.push(pages.slice(i, i + CH));
   let firstFid = "", saved = 0;
@@ -1495,13 +1495,13 @@ export async function handleNhSave(env, cbId, chatId, tok) {
     if (ci < chunks.length - 1) await sleep(300);
   }
   if (saved) await nhIndexPush(env, { id: e.id, title, fid: firstFid, kind: "photo", mime: "image/jpeg", size: 0, n: saved });
-  try { await tg(env, "answerCallbackQuery", { callback_query_id: cbId, text: saved ? L.nhSaved + " ✓ (" + saved + " hal di vault)" : "gagal kirim ke vault" }); } catch (_) {}
+  try { await tg(env, "answerCallbackQuery", { callback_query_id: cbId, text: saved ? L.nhVaultSaved(saved) : L.nhVaultSendFail }); } catch (_) {}
 }
 
 export async function handleNhNzip(env, cbId, chatId, idRaw) {
   const L = await uiLang(env);
   const id = Number(String(idRaw || "").trim());
-  if (!id || !Number.isInteger(id)) { try { await tg(env, "answerCallbackQuery", { callback_query_id: cbId, text: "id gak valid" }); } catch (_) {} return; }
+  if (!id || !Number.isInteger(id)) { try { await tg(env, "answerCallbackQuery", { callback_query_id: cbId, text: L.nhBadId }); } catch (_) {} return; }
   const hit = await nhCacheGet(env, id, "zip");
   try { await tg(env, "answerCallbackQuery", { callback_query_id: cbId, text: hit ? L.nhCachePop : L.nhZipPop }); } catch (_) {}
   if (hit) return nhCacheDeliver(env, chatId, L, id, "zip", hit);
@@ -1531,11 +1531,11 @@ export async function handleNhop(env, cbId, chatId, id) {
     await tg(env, "sendChatAction", { chat_id: chatId, action: "upload_photo" });
     const meta = await nhMeta(env, id);
     const pages = meta && Array.isArray(meta.pages) ? meta.pages : [];
-    if (!pages.length) { await tg(env, "answerCallbackQuery", { callback_query_id: cbId, text: "not found" }); return; }
+    if (!pages.length) { await tg(env, "answerCallbackQuery", { callback_query_id: cbId, text: L.nhNotFound }); return; }
     const title = (meta && meta.title) ? String(meta.title).slice(0, 110) : "NH #" + id;
     const n = meta && meta.num_pages ? meta.num_pages : 0;
     return nhAlbumDeliver(env, chatId, L, id, title, n, pages, 0);
-  } catch (_) { try { await tg(env, "answerCallbackQuery", { callback_query_id: cbId, text: "L" }); } catch (_) {} }
+  } catch (_) { try { await tg(env, "answerCallbackQuery", { callback_query_id: cbId, text: L.nhOpenFail }); } catch (_) {} }
 }
 
 export async function handleYts(env, msg, chatId) {

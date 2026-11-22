@@ -45,14 +45,13 @@ export async function chainStartCb(env, chatId, mid, L) {
   const genMid = mid;
   if (genMid) await tg(env, "editMessageText", { chat_id: chatId, message_id: genMid, text: L.chainGenWait, parse_mode: "HTML" });
   try {
-    const arcId = (await env.KV.get(UI_LANG_KEY)) === "id";
     const sysChain = SYS_CHAIN + langLine(await env.KV.get(UI_LANG_KEY));
-    const arcAsk = arcId ? "Bikin arc-nya sekarang." : "Compose the arc now.";
+    const arcAsk = "Compose the arc now.";
     let out = "";
     for await (const d of chatStream(env, [{ role: "system", content: sysChain }, { role: "user", content: arcAsk }], 250, 50000)) out += d;
     const line = (stripThink(out).split("\n").map(s => s.trim()).filter(Boolean).pop() || "").replace(/^["']|["']$/g, "");
     const parts = line.split("|").map(s => s.trim()).filter(Boolean);
-    if (parts.length < 6 || !parts[0] || parts.slice(1, 6).some(s => !s)) throw new Error("parse arc gagal: " + line.slice(0, 80));
+    if (parts.length < 6 || !parts[0] || parts.slice(1, 6).some(s => !s)) throw new Error("arc parse failed: " + line.slice(0, 80));
     const arc = { state: "active", name: parts[0].slice(0, 80), steps: parts.slice(1, 6).map(s => s.slice(0, 80)), done: 0, startDay: questDay(Math.floor(Date.now() / 1000)), lastStepDay: "" };
     await putJSON(env, CHAIN_KEY + chatId, arc);
     const v = await chainView(env, chatId, await uiLang(env));
