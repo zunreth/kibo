@@ -2,8 +2,9 @@
 import {
   SLEEP_LOG_KEY, SLEEP_GN_KEY, HABITS_KEY, EXP_KEY, COUNTDOWN_KEY, COUNTDOWN_MAX, COUNTDOWN_NAME_CAP,
   HABIT_MAX, HABIT_PLAN_KEY, MEM_KEY, CMEM_PREFIX, FILE_INDEX_KEY, READLIST_KEY, WX_LOC_KEY, WX_CTX_KEY,
-  SLEEP_CAP_H, SHIELD_MAX, SHIELD_PRICE,
+  SLEEP_CAP_H, SHIELD_MAX, SHIELD_PRICE, NOTE_KEY,
 } from './consts.js';
+import { todoList, todoAdd, todoDone, todoDel, todoSnooze, todoLine, sortTodos, parseDue } from './feat-todo.js';
 import { getJSON, putJSON } from './base.js';
 import { fmtWIB, UI } from './ui.js';
 import { questDay, XP_PER_LEVEL, journalAdd, shieldBuy, questReroll, REROLL_LIMIT } from './feat-remind.js';
@@ -301,7 +302,7 @@ export async function agentSearch(env, chatId, a) {
   const q = esc1(a && (a.query || a.q)).toLowerCase();
   if (!q) return "error: what should I search for?";
   const card = await getActiveCard(env).catch(() => null);
-  const [mems, files, journal, remObj, cd, rl, caps] = await Promise.all([
+  const [mems, files, journal, remObj, cd, rl, caps, notes, tds] = await Promise.all([
     getJSON(env, card ? CMEM_PREFIX + card.id : MEM_KEY, []),
     getJSON(env, FILE_INDEX_KEY, []),
     getJSON(env, "journal", []),
@@ -309,6 +310,8 @@ export async function agentSearch(env, chatId, a) {
     getJSON(env, COUNTDOWN_KEY, []),
     getJSON(env, READLIST_KEY + (chatId || 0), { list: [] }),
     capsuleItems(env).catch(() => []),
+    getJSON(env, NOTE_KEY, []),
+    todoList(env).catch(() => []),
   ]);
   const hit = s => String(s == null ? "" : s).toLowerCase().includes(q);
   const out = [];
@@ -319,7 +322,9 @@ export async function agentSearch(env, chatId, a) {
   for (const c of (cd || [])) if (c && hit(c.name)) out.push("countdown #" + c.id + ": " + esc1(c.name) + " — " + c.day);
   for (const i of ((rl && rl.list) || [])) if (i && hit(i.title)) out.push("reading list: " + esc1(i.title) + (i.done ? " (done)" : ""));
   for (const c of (caps || [])) if (c && !c.fired && (hit(c.text) || hit(fmtWIB(c.due)))) out.push("time capsule (opens " + fmtWIB(c.due) + "): " + esc1(c.text).slice(0, 160));
-  if (!out.length) return "nothing found for \"" + q + "\" in memories, saved notes, journal, reminders, countdowns, the reading list or the time capsules";
+  for (const n of (notes || [])) if (n && hit(n.t)) out.push("note #" + n.id + ": " + esc1(n.t).slice(0, 180));
+  for (const t of (tds || [])) if (t && hit(t.text)) out.push("todo #" + t.id + (t.done ? " (done)" : t.due ? " (due " + fmtWIB(t.due) + ")" : "") + ": " + esc1(t.text));
+  if (!out.length) return "nothing found for \"" + q + "\" in memories, notes, journal, reminders, todos, countdowns, the reading list or the time capsules";
   const shown = out.slice(0, 12);
   return "found " + out.length + " hit(s) for \"" + q + "\":\n" + shown.join("\n") + (out.length > shown.length ? "\n… and " + (out.length - shown.length) + " more" : "");
 }
@@ -433,4 +438,46 @@ export async function agentQuest(env, chatId, a) {
   const shields = q.shields || 0;
   return "quest housekeeping:\nshields " + shields + "/" + SHIELD_MAX + " (cost " + SHIELD_PRICE + " points) · points " + num(q.points) +
     " · streak " + (q.streak || 0) + "\nbuy one with the quest tool (action=shield), reroll today's quest with action=reroll";
+}
+
+export async function agentTodo(env, a) {
+  const action = String((a && a.action) || "list").toLowerCase();
+  const who = (a && (a.id ?? a.text ?? a.task)) ?? "";
+  if (action === "add" || action === "new") {
+    const text = esc1(a && (a.text || a.task || a.name));
+    if (!text) return "error: what is the task? pass text";
+    const due = a && a.due ? parseDue(a.due) : null;
+    if (a && a.due && !due) return "error: could not read the due time \"" + esc1(a.due) + "\" — examples: 2h, besok 09:00, 2026-12-01";
+    const rec = /^(daily|weekly)$/i.test(String((a && a.rec) || "")) ? String(a.rec).toLowerCase() : null;
+    const r = await todoAdd(env, text, due, rec);
+    if (!r.ok) return r.why === "full" ? "error: the todo list is full (" + r.max + ") — finish or delete one first" : "error: the task text is empty";
+    return "todo #" + r.id + " added: \"" + r.text + "\"" + (r.due ? " — due " + fmtWIB(r.due) : "") + (r.rec ? " (repeats " + r.rec + ")" : "") + " · " + r.open + " open";
+  }
+  if (action === "done" || action === "check" || action === "finish") {
+    const r = await todoDone(env, who);
+    if (r.ok) return "todo #" + r.id + " done: \"" + r.text + "\"" + (r.respawned ? " — the next copy was created" : "") + " · " + r.left + " open";
+    if (r.why === "already") return "todo \"" + esc1(r.text) + "\" was already done — nothing changed";
+    if (r.why === "many") return "several todos match: " + r.hits.map(t => "#" + t.id + " " + esc1(t.text)).join(" | ") + " — call again with the exact id";
+    return "error: no todo matches \"" + esc1(who) + "\"";
+  }
+  if (action === "del" || action === "delete" || action === "remove") {
+    const r = await todoDel(env, who);
+    if (r.ok) return "todo #" + r.id + " deleted (\"" + esc1(r.text) + "\") · " + r.left + " open";
+    if (r.why === "many") return "several todos match: " + r.hits.map(t => "#" + t.id + " " + esc1(t.text)).join(" | ") + " — call again with the exact id";
+    return "error: no todo matches \"" + esc1(who) + "\"";
+  }
+  if (action === "snooze" || action === "postpone") {
+    const until = parseDue(a && (a.due || a.when || a.until));
+    if (!until) return "error: snooze until when? pass due (e.g. 2h, besok 09:00)";
+    const r = await todoSnooze(env, who, until);
+    if (r.ok) return "todo \"" + esc1(r.text) + "\" snoozed to " + fmtWIB(r.due);
+    if (r.why === "many") return "several todos match: " + r.hits.map(t => "#" + t.id + " " + esc1(t.text)).join(" | ") + " — call again with the exact id";
+    return "error: no todo matches \"" + esc1(who) + "\"";
+  }
+  const arr = sortTodos(await todoList(env));
+  if (!arr.length) return "the todo list is empty";
+  const open = arr.filter(t => !t.done);
+  const done = arr.filter(t => t.done);
+  return "todos (" + open.length + " open" + (done.length ? ", " + done.length + " done" : "") + "):\n" +
+    arr.slice(0, 20).map(t => todoLine(t)).join("\n") + (arr.length > 20 ? "\n… and " + (arr.length - 20) + " more" : "");
 }

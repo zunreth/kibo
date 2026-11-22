@@ -9,6 +9,7 @@ import {
   dayWIB, monWIB, rp, expSummary, expBudget, focusState,
 } from './feat-life.js';
 import { activeReminders, agentSearch } from './feat-agent.js';
+import { todoList, sortTodos } from './feat-todo.js';
 import { wxNow } from './feat-ctx.js';
 import { hnTop } from './feat-b8.js';
 
@@ -33,7 +34,7 @@ function wibMin(sec) {
 
 async function daySnapshot(env, chatId) {
   const sec = nowS();
-  const [remObj, q, habits, sleepLog, gn, expArr, budget, cd, focus] = await Promise.all([
+  const [remObj, q, habits, sleepLog, gn, expArr, budget, cd, focus, tds] = await Promise.all([
     getJSON(env, "reminders", {}),
     getJSON(env, "quest", {}),
     getJSON(env, HABITS_KEY, []),
@@ -43,11 +44,17 @@ async function daySnapshot(env, chatId) {
     expBudget(env),
     getJSON(env, COUNTDOWN_KEY, []),
     focusState(env, sec),
+    todoList(env).catch(() => []),
   ]);
   const today = dayWIB(sec);
   const { start, end } = dayRange(sec);
   const active = activeReminders(remObj);
+  const openTodos = sortTodos(tds.filter(t => t && !t.done), sec);
   return {
+    todos: openTodos,
+    tdOpen: openTodos.length,
+    tdDue: openTodos.filter(t => t.due && dayWIB(t.due) === today).length,
+    tdOver: openTodos.filter(t => t.due && t.due < sec && dayWIB(t.due) !== today).length,
     sec, today, start, end,
     q, focus,
     reminders: active,
@@ -81,6 +88,9 @@ export async function briefText(env, chatId, L) {
     out.push("\u23F0 <b>" + L.brLblRem + "</b> (" + s.todayReminders.length + ")\n" + s.todayReminders.slice(0, 5).map(x => "  " + hhmm(x.r.at) + " \u2014 " + esc(trim1(x.r.text))).join("\n"));
   } else out.push("\u23F0 <b>" + L.brLblRem + "</b> \u00B7 " + L.brNoRem);
   out.push("\u{1F3AF} <b>" + L.brLblQuest + "</b> \u00B7 " + questStateText(L, s));
+  out.push("\u2705 <b>" + L.brLblTodo + "</b> \u00B7 " + (s.tdOpen
+    ? L.brTodoLine(s.tdDue, s.tdOver, s.tdOpen, esc(trim1(s.todos[0].text)))
+    : L.brNoTodo));
 
   const hs = s.habits;
   if (hs.length) {
@@ -156,6 +166,9 @@ export async function nowView(env, chatId) {
   if (s.focus.busy) out.push("\u{1F3AF} <b>" + L.brLblFocus + "</b> \u00B7 " + L.nowFocusRun(Math.ceil(s.focus.left / 60), hhmm(s.focus.st.start + s.focus.st.dur)));
   else out.push("\u{1F3AF} <b>" + L.brLblFocus + "</b> \u00B7 " + L.nowNoFocus);
   out.push("\u{1F3AF} <b>" + L.brLblQuest + "</b> \u00B7 " + questStateText(L, s));
+  out.push("\u2705 <b>" + L.brLblTodo + "</b> \u00B7 " + (s.tdOpen
+    ? s.tdOpen + " open" + (s.tdDue ? " \u00B7 " + s.tdDue + " due today" : "") + (s.tdOver ? " \u00B7 " + s.tdOver + " overdue" : "") + " \u00B7 " + esc(trim1(s.todos[0].text))
+    : L.brNoTodo));
   const next = s.reminders[0];
   out.push("\u23F0 <b>" + L.brLblRem + "</b> \u00B7 " + (next ? hhmm(next.r.at) + " " + esc(trim1(next.r.text)) + (s.reminders.length > 1 ? " " + L.nowMore(s.reminders.length - 1) : "") : L.brNoRem));
   if (s.habits.length) {

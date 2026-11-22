@@ -148,6 +148,7 @@ import {
   agentHeadlines,
   agentShorten,
   agentQuest,
+  agentTodo,
 } from './feat-agent.js';
 
 export const TOOLS_AGENT = [
@@ -175,7 +176,8 @@ export const TOOLS_AGENT = [
   { type: "function", function: { name: "capsule", description: "Time capsules: a letter the user writes now that the bot delivers later. action='list'; 'add' with text + when (e.g. '2h', '3d', 'besok 09:00'); 'del' with the pending item number. Use it when the user wants to send a message to their future self.", parameters: { type: "object", properties: { action: { type: "string", enum: ["list", "add", "del"], description: "what to do" }, text: { type: "string", description: "the letter (for add)" }, when: { type: "string", description: "when it should open (for add)" }, id: { type: "integer", description: "pending capsule number (for del)" } }, required: ["action"] } } },
   { type: "function", function: { name: "headlines", description: "Today's Hacker News front page (title, points, comments, url). Use it for 'what's happening / anything interesting today'. Do not invent headlines if it fails.", parameters: { type: "object", properties: { count: { type: "integer", description: "how many, 1-10 (default 5)" } } } } },
   { type: "function", function: { name: "shorten", description: "Turn a long URL into a short link on the bot's own domain. Use it whenever the user will want to retype or share a link.", parameters: { type: "object", properties: { url: { type: "string", description: "the http(s) URL" } }, required: ["url"] } } },
-  { type: "function", function: { name: "quest", description: "Quest housekeeping. action='status' shows shields/points/streak; 'shield' buys a streak shield with points; 'reroll' swaps today's daily quest (limited per day).", parameters: { type: "object", properties: { action: { type: "string", enum: ["status", "shield", "reroll"], description: "what to do" } }, required: ["action"] } } }
+  { type: "function", function: { name: "quest", description: "Quest housekeeping. action='status' shows shields/points/streak; 'shield' buys a streak shield with points; 'reroll' swaps today's daily quest (limited per day).", parameters: { type: "object", properties: { action: { type: "string", enum: ["status", "shield", "reroll"], description: "what to do" } }, required: ["action"] } } },
+  { type: "function", function: { name: "todo", description: "The user's task list (things to do, as opposed to reminders which fire at a moment). action='list'; 'add' with text (+ optional due like 'besok 09:00' or '2026-12-01', + rec='daily'/'weekly' to repeat); 'done' / 'del' / 'snooze' with id (or part of the text) — snooze also needs due.", parameters: { type: "object", properties: { action: { type: "string", enum: ["list", "add", "done", "del", "snooze"], description: "what to do" }, text: { type: "string", description: "task text (for add) or part of it (to find one)" }, id: { type: "integer", description: "task id when known" }, due: { type: "string", description: "when it is due (add/snooze), e.g. '2h', 'besok 09:00', '2026-12-01'" }, rec: { type: "string", enum: ["daily", "weekly"], description: "repeat this task after it is done (optional)" } }, required: ["action"] } } }
 ];
 
 export function ddgHost(u) {
@@ -371,6 +373,7 @@ export async function execTool(env, name, argsJson, chatId) {
   if (name === "headlines") return agentHeadlines(env, a);
   if (name === "shorten") return agentShorten(env, a);
   if (name === "quest") return agentQuest(env, chatId || parseInt((await env.KV.get("owner_chat")) || "0", 10), a);
+  if (name === "todo") return agentTodo(env, a);
 
   if (name === "open_url" || (!q && url)) {
     if (!url) return "error: url is empty";
@@ -439,6 +442,12 @@ export function toolLabel(name, argsJson, L) {
   if (name === "capsule") {
     const act = String(a.action || "list").toLowerCase();
     return act === "add" ? L.tlCapsule + ": " + String(a.text || "?").slice(0, 40) + (a.when ? " (" + a.when + ")" : "") : L.tlCapsule + (act === "list" ? "" : " · " + act + " " + (a.id || ""));
+  }
+  if (name === "todo") {
+    const act = String(a.action || "list").toLowerCase();
+    if (act === "add") return L.tlTodoAdd + (a.text || a.task || "?");
+    if (act === "list") return L.tlTodoList;
+    return L.tlTodo + " \u00B7 " + act + " " + (a.id || a.text || "");
   }
   if (name === "headlines") return L.tlHeadlines + (a.n || a.count || 5);
   if (name === "shorten") return L.tlShorten + String(a.url || a.link || "?").slice(0, 60);
