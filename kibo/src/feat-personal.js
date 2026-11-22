@@ -819,7 +819,7 @@ export async function sysView(env) {
   } catch (_) {}
   return {
     text: [L.sysTitle, mainSec, d1Sec, partnerSec, L.sysAI(cfai.model, aiHost), wh, cronSec, cmdSec, workerSec, L.sysOtp(sysInfoOf(env).zone)].filter(Boolean).join(SEP) + L.sysFoot,
-    markup: { inline_keyboard: [[{ text: L.sysUsageBtn, callback_data: "nav:usage" }, { text: L.back, callback_data: "nav:stats" }, { text: L.home, callback_data: "menu" }]] }
+    markup: { inline_keyboard: [[{ text: L.sysDoctorBtn, callback_data: "nav:doctor" }, { text: L.sysUsageBtn, callback_data: "nav:usage" }], [{ text: L.back, callback_data: "nav:stats" }, { text: L.home, callback_data: "menu" }]] }
   };
 }
 

@@ -91,6 +91,7 @@ import {
 import { askSet, askGet, askClear } from './src/ask.js';
 import { cronBeat } from './src/cron-ledger.js';
 import { hcPing } from './src/health.js';
+import { handleDoctor } from './src/feat-doctor.js';
 const ASK_ROUTES = { rp: rpAsk, sfan: gameFanAsk };
 import {
   STAMP_LAST,
@@ -544,7 +545,11 @@ async function handleUpdate(update, env) {
   if (cmd === "/ooc") return handleOoc(env, msg, chatId);
   if (cmd === "/stats") { const v = await renderStatsView(env); return tg(env, "sendMessage", { chat_id: chatId, text: v.text, parse_mode: "HTML", reply_markup: v.markup }); }
   if (cmd === "/profile") { const v = await renderProfile(env); return tg(env, "sendMessage", { chat_id: chatId, text: v.text, parse_mode: "HTML", reply_markup: v.markup }); }
-  if (cmd === "/sys") return handleSys(env, chatId);
+  if (cmd === "/sys") {
+    const sub = (text.split(/\s+/)[1] || "").toLowerCase();
+    if (sub === "doctor" || sub === "doc") return handleDoctor(env, chatId);
+    return handleSys(env, chatId);
+  }
   if (cmd === "/debug") return handleDebug(env, msg, chatId);
   if (text) {
     fReact(env, chatId, msg.message_id, text).catch(() => {});
@@ -835,6 +840,9 @@ async function handleCallback(env, cb) {
   } else if (act === "sys" && chatId) {
     await tg(env, "answerCallbackQuery", { callback_query_id: cb.id });
     await handleSys(env, chatId, mid);
+  } else if (act === "doctor" && chatId) {
+    await tg(env, "answerCallbackQuery", { callback_query_id: cb.id });
+    await handleDoctor(env, chatId, mid);
   } else if (act === "dbg" && chatId) {
     if (arg === "on") { await setDebug(env, true); dbgLog(env, "dbg", "on"); await pop(L.dbgOnPop); }
     else if (arg === "off") { await setDebug(env, false); await pop(L.dbgOffPop); }
