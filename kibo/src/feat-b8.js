@@ -29,16 +29,41 @@ function rlBuild(L, rl) {
   };
 }
 
-export async function rlAdd(env, chatId, title) {
-  const L = await uiLang(env);
-  const t = String(title || "").replace(/[<>]/g, "").trim().slice(0, 120);
-  if (!t) return reply(env, chatId, L.rlUsage);
+export async function rlItems(env, chatId) {
   const rl = await getJSON(env, READLIST_KEY + chatId, { list: [] });
-  if ((rl.list || []).length >= READLIST_MAX) return reply(env, chatId, L.rlFull(READLIST_MAX));
+  return (rl && rl.list) || [];
+}
+export async function rlAddCore(env, chatId, title) {
+  const t = String(title || "").replace(/[<>]/g, "").trim().slice(0, 120);
+  if (!t) return { ok: false, why: "empty" };
+  const rl = await getJSON(env, READLIST_KEY + chatId, { list: [] });
+  if ((rl.list || []).length >= READLIST_MAX) return { ok: false, why: "full", max: READLIST_MAX };
   const id = (rl.list || []).reduce((a, x) => Math.max(a, x.id || 0), 0) + 1;
   rl.list.unshift({ id, title: t, done: 0 });
   await putJSON(env, READLIST_KEY + chatId, rl);
-  return reply(env, chatId, L.rlAdded(id, esc(t)));
+  return { ok: true, id, title: t, n: rl.list.length };
+}
+export async function rlSetDone(env, chatId, id, done) {
+  const rl = await getJSON(env, READLIST_KEY + chatId, { list: [] });
+  const x = (rl.list || []).find(i => i.id === Number(id));
+  if (!x) return null;
+  x.done = done ? 1 : 0;
+  await putJSON(env, READLIST_KEY + chatId, rl);
+  return x;
+}
+export async function rlRemove(env, chatId, id) {
+  const rl = await getJSON(env, READLIST_KEY + chatId, { list: [] });
+  const x = (rl.list || []).find(i => i.id === Number(id));
+  if (!x) return null;
+  rl.list = rl.list.filter(i => i.id !== Number(id));
+  await putJSON(env, READLIST_KEY + chatId, rl);
+  return x;
+}
+export async function rlAdd(env, chatId, title) {
+  const L = await uiLang(env);
+  const r = await rlAddCore(env, chatId, title);
+  if (!r.ok) return reply(env, chatId, r.why === "full" ? L.rlFull(READLIST_MAX) : L.rlUsage);
+  return reply(env, chatId, L.rlAdded(r.id, esc(r.title)));
 }
 
 export async function rlView(env, chatId, mid) {
@@ -49,18 +74,15 @@ export async function rlView(env, chatId, mid) {
 
 export async function rlToggle(env, chatId, mid, id) {
   const L = await uiLang(env);
-  const rl = await getJSON(env, READLIST_KEY + chatId, { list: [] });
-  const x = (rl.list || []).find(i => i.id === Number(id));
-  if (x) { x.done = x.done ? 0 : 1; await putJSON(env, READLIST_KEY + chatId, rl); }
-  return editView(env, chatId, mid, rlBuild(L, rl));
+  const cur = (await rlItems(env, chatId)).find(i => i.id === Number(id));
+  if (cur) await rlSetDone(env, chatId, id, !cur.done);
+  return editView(env, chatId, mid, rlBuild(L, { list: await rlItems(env, chatId) }));
 }
 
 export async function rlDel(env, chatId, mid, id) {
   const L = await uiLang(env);
-  let rl = await getJSON(env, READLIST_KEY + chatId, { list: [] });
-  rl.list = (rl.list || []).filter(i => i.id !== Number(id));
-  await putJSON(env, READLIST_KEY + chatId, rl);
-  return editView(env, chatId, mid, rlBuild(L, rl));
+  await rlRemove(env, chatId, id);
+  return editView(env, chatId, mid, rlBuild(L, { list: await rlItems(env, chatId) }));
 }
 
 const OTD_API = "https://en.wikipedia.org/api/rest_v1/feed/onthisday/all/";
@@ -101,20 +123,24 @@ const B62_ALPH = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ
 function b62(n) { let s = ""; do { s = B62_ALPH[n % 62] + s; n = Math.floor(n / 62); } while (n > 0); return s; }
 function shValid(u) { return /^https?:\/\//i.test(u) && u.length <= SHORT_URL_MAX; }
 
-export async function shortAdd(env, chatId, raw) {
-  const L = await uiLang(env);
+export async function shorten(env, raw) {
   const u = String(raw || "").trim();
-  if (!u) return reply(env, chatId, L.shnUsage);
-  if (!shValid(u)) return reply(env, chatId, L.shnBad);
+  const host = env.SHORT_HOST || env.SELF_BASE || "";
+  if (!u) return { ok: false, why: "empty" };
+  if (!shValid(u)) return { ok: false, why: "bad", max: SHORT_URL_MAX };
+  if (!host) return { ok: false, why: "nohost" };
   const cnt = await getJSON(env, SHORT_COUNT_KEY, { n: 0 });
   const n = (cnt.n || 0) + 1;
   const code = b62(n);
   await putJSON(env, SHORT_KEY + code, { url: u, ts: Date.now() });
   await putJSON(env, SHORT_COUNT_KEY, { n });
-  const host = env.SHORT_HOST || env.SELF_BASE || "";
-  if (!host) return reply(env, chatId, L.shnUsage);
-  const short = "https://" + host + "/s/" + code;
-  return reply(env, chatId, L.shnMade(esc(short), esc(u)));
+  return { ok: true, code, short: "https://" + host + "/s/" + code, url: u };
+}
+export async function shortAdd(env, chatId, raw) {
+  const L = await uiLang(env);
+  const r = await shorten(env, raw);
+  if (!r.ok) return reply(env, chatId, r.why === "bad" ? L.shnBad : L.shnUsage);
+  return reply(env, chatId, L.shnMade(esc(r.short), esc(r.url)));
 }
 
 export async function shortResolve(env, code) {
@@ -227,12 +253,8 @@ export async function pasteGet(env, id) {
 
 const HN_KEY = "hn_top";
 const HN_TTL_MS = 30 * 60 * 1000;
-export async function handleHn(env, chatId, arg) {
-  const L = await uiLang(env);
-  let n = parseInt(String(arg || "").trim(), 10);
-  if (!Number.isFinite(n) || n < 1) n = 10;
-  n = Math.min(n, 15);
-  let hits = [], fail = false;
+export async function hnTop(env, n) {
+  let hits = [];
   try {
     const c = await getJSON(env, HN_KEY, null);
     if (c && Array.isArray(c.hits) && c.hits.length) hits = c.hits;
@@ -243,7 +265,15 @@ export async function handleHn(env, chatId, arg) {
       hits = ((j && j.hits) || []).filter(h => h && h.title).slice(0, 15).map(h => ({ t: String(h.title), u: h.url || ("https://news.ycombinator.com/item?id=" + h.objectID), p: h.points || 0, c: h.num_comments || 0 }));
       if (hits.length) { try { await putJSON(env, HN_KEY, { hits }, env.DB ? { ttlMs: HN_TTL_MS } : undefined); } catch (_) {} }
     }
-  } catch (_) { fail = true; }
+  } catch (_) { return []; }
+  return hits.slice(0, Math.min(15, Math.max(1, n || 10)));
+}
+export async function handleHn(env, chatId, arg) {
+  const L = await uiLang(env);
+  let n = parseInt(String(arg || "").trim(), 10);
+  if (!Number.isFinite(n) || n < 1) n = 10;
+  n = Math.min(n, 15);
+  const hits = await hnTop(env, n);
   if (!hits.length) return reply(env, chatId, L.hnFail);
   const lines = hits.slice(0, n).map((h, i) => (i + 1) + ". <a href=\"" + esc(h.u) + "\">" + esc(h.t) + "</a> · " + h.p + " pts · " + h.c + " 💬");
   return reply(env, chatId, L.hnCard(lines.join("\n")));

@@ -683,7 +683,7 @@ export function lootNoteText(loot, total) {
 }
 
 export const RR_LOCK = new Map();
-export async function questReroll(env, chatId) {
+export async function questReroll(env, chatId, quiet) {
   const nowMs = Date.now();
   const lt = RR_LOCK.get(chatId);
   if (lt && nowMs - lt < parseInt(env.RR_LOCK_MS || "15000", 10)) return "locked";
@@ -694,7 +694,7 @@ export async function questReroll(env, chatId) {
   const pool = L.quests;
   const rr = await getJSON(env, "quest_rr", { day: "", n: 0 });
   if (rr.day !== day) { rr.day = day; rr.n = 0; }
-  if (rr.n >= REROLL_LIMIT) { await notify(env, chatId, L.rrLimit(REROLL_LIMIT)); return "limit"; }
+  if (rr.n >= REROLL_LIMIT) { if (!quiet) await notify(env, chatId, L.rrLimit(REROLL_LIMIT)); return "limit"; }
   const q = await getJSON(env, "quest", {});
   const base = (q.day === day && pool[q.idx]) ? q.idx : questOfDay(day, pool);
   const idx = (base + 1 + Math.floor(Math.random() * (pool.length - 1))) % pool.length;
@@ -712,18 +712,27 @@ export async function questReset(env, chatId) {
   await notify(env, chatId, L.qresetMsg);
 }
 
+export async function shieldBuy(env) {
+  const q = await getJSON(env, "quest", {});
+  if ((q.shields || 0) >= SHIELD_MAX) return { ok: false, why: "max", max: SHIELD_MAX, shields: q.shields || 0 };
+  if ((q.points || 0) < SHIELD_PRICE) return { ok: false, why: "poor", price: SHIELD_PRICE, points: q.points || 0 };
+  q.shields = (q.shields || 0) + 1;
+  await putJSON(env, "quest", q);
+  await addPts(env, -SHIELD_PRICE);
+  const w = await getJSON(env, "quest", {});
+  return { ok: true, shields: w.shields || 0, points: w.points || 0, price: SHIELD_PRICE };
+}
 export async function handleShield(env, msg, chatId) {
   const L = await uiLang(env);
   const arg = (msg.text || "").replace(/^\/\S+\s*/, "").trim().toLowerCase();
   const q = await getJSON(env, "quest", {});
   if (!arg.startsWith("buy")) return reply(env, chatId, L.shStatus(q.shields || 0, q.points || 0, SHIELD_MAX) + "\n" + L.shHow(SHIELD_PRICE));
-  if ((q.shields || 0) >= SHIELD_MAX) { await notify(env, chatId, L.shMax(SHIELD_MAX)); return; }
-  if ((q.points || 0) < SHIELD_PRICE) { await reply(env, chatId, L.shPoor(SHIELD_PRICE, q.points || 0)); return; }
-  q.shields = (q.shields || 0) + 1;
-  await putJSON(env, "quest", q);
-  await addPts(env, -SHIELD_PRICE);
-  const w = await getJSON(env, "quest", {});
-  await notify(env, chatId, L.shBought(w.shields || 0, w.points || 0));
+  const r = await shieldBuy(env);
+  if (!r.ok) {
+    if (r.why === "max") return notify(env, chatId, L.shMax(SHIELD_MAX));
+    return reply(env, chatId, L.shPoor(r.price, r.points));
+  }
+  return notify(env, chatId, L.shBought(r.shields, r.points));
 }
 
 export function questKb(L) {

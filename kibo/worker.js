@@ -316,6 +316,7 @@ import { handleGame, gameIntercept, gameMenu, gameWordStart, gameStop, gameQuizS
 import { diveStart, diveSkip, diveStop, divePrac, diveModePick, diveIntercept, diveCronTick, divePreGen } from './src/feat-dive.js';
 import { handleShop, shopBuy, handleInv, invUse, handleGacha, gachaPull, handleCharms, charmEq, handleAch, bmSave, handleHub } from './src/feat-econ.js';
 import { rlAdd, rlView, rlToggle, rlDel, otdView, shortAdd, shortResolve, wrapView, pasteAdd, pasteGet, handleHn } from './src/feat-b8.js';
+import { handleBrief, handleNow, handleReport, briefCron, nowView, sendBrief, handleSearchAll } from './src/feat-board.js';
 import { SHORT_KEY } from './src/consts.js';
 import { handleDl, handleSong, handleSpotify, dlPlatform, delQsweep, handleDlPick, handleYts, handleYtsPick, handleYtBuild, handleYtUpload, handleYtGha, handleYtCb, handleNh, handleNhSave, handleNhs, handleNhop, handleNhNzip, handleNhCb, nhLinkId, nhRun, nhWatchdog } from './src/feat-media.js';
 import { handleSauceCmd, handleSaucePhoto } from './src/feat-sauce.js';
@@ -407,6 +408,7 @@ export default {
         }
       };
       await beat("cron", runCron(env));
+      await beat("brief", briefCron(env, Math.floor(Date.now() / 1000)));
       await Promise.all([
         beat("stats", flushStatsBuf(env)), beat("nuke", flushNukeBuf(env)), beat("d1", d1Sweep(env)),
         beat("shadow", shadowSync(env)), beat("delq", delQsweep(env)),
@@ -515,6 +517,7 @@ async function handleUpdate(update, env) {
   if (cmd === "/sleep") { await delCmd(env, chatId, msg.message_id); return handleSleep(env, msg, chatId); }
   if (cmd === "/habit") { await delCmd(env, chatId, msg.message_id); return handleHabit(env, msg, chatId); }
   if (cmd === "/beli") { await delCmd(env, chatId, msg.message_id); return handleBeli(env, msg, chatId); }
+  if (cmd === "/exp") { await delCmd(env, chatId, msg.message_id); return handleBeli(env, Object.assign({}, msg, { text: "/beli" + text.slice(cmd.length) }), chatId); }
   if (cmd === "/shop") return handleShop(env, chatId, 0);
   if (cmd === "/gacha") return handleGacha(env, chatId, 0);
   if (cmd === "/inv") return handleInv(env, chatId, 0);
@@ -522,6 +525,14 @@ async function handleUpdate(update, env) {
   if (cmd === "/bm") { await delCmd(env, chatId, msg.message_id); return bmSave(env, msg, chatId, String(msg.text || "").replace(/^\/bm(@[A-Za-z0-9_]+)?/, "").trim()); }
   if (cmd === "/capsule") { await delCmd(env, chatId, msg.message_id); return handleCapsule(env, msg, chatId); }
   if (cmd === "/countdown") return handleCountdown(env, msg, chatId);
+  if (cmd === "/brief" || cmd === "/pagi") { await delCmd(env, chatId, msg.message_id); return handleBrief(env, msg, chatId); }
+  if (cmd === "/now" || cmd === "/status") { await delCmd(env, chatId, msg.message_id); return handleNow(env, chatId); }
+  if (cmd === "/report" || cmd === "/minggu") { await delCmd(env, chatId, msg.message_id); return handleReport(env, chatId); }
+  if (cmd === "/s" || cmd === "/cari") {
+    const q = text.slice(cmd.length).trim();
+    if (!q) return reply(env, chatId, (await uiLang(env)).sUsage);
+    return handleSearchAll(env, chatId, q);
+  }
   if (cmd === "/ama") return handleAma(env, msg, chatId);
   if (cmd === "/alarm") return handleAlarm(env, msg, chatId);
   if (cmd === "/chain") return handleChain(env, msg, chatId);
@@ -588,6 +599,11 @@ async function handleCallback(env, cb) {
     }
     await pop(L.popRemDel(arg));
     await edit(renderReminders(obj, L));
+  } else if (act === "now" && chatId) {
+    if (arg === "b") { await pop(L.nowBriefPop); return sendBrief(env, chatId, L); }
+    const v = await nowView(env, chatId);
+    await edit(v);
+    await pop(L.nowPop);
   } else if (act === "quest" && chatId) {
     const p = await handleQuestCb(env, chatId, mid, arg);
     if (p) await pop(p);

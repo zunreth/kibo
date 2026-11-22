@@ -143,6 +143,11 @@ import {
   agentWeather,
   agentSearch,
   agentDoctor,
+  agentReadingList,
+  agentCapsule,
+  agentHeadlines,
+  agentShorten,
+  agentQuest,
 } from './feat-agent.js';
 
 export const TOOLS_AGENT = [
@@ -159,13 +164,18 @@ export const TOOLS_AGENT = [
   { type: "function", function: { name: "my_status", description: "One snapshot of the user's life data: level/XP, points, today's daily quest + streak/shields, open side quests, active reminders, last night's sleep, habits done today, money spent this month, journal activity, upcoming countdowns. Call it before answering anything like 'how am I doing', 'what's pending', 'how much did I spend'.", parameters: { type: "object", properties: {} } } },
   { type: "function", function: { name: "journal", description: "The user's private journal. action='read' returns the latest entries (count=how many, default 3). action='write' appends an entry the user just dictated — keep their words and their #feeling tags.", parameters: { type: "object", properties: { action: { type: "string", enum: ["read", "write"], description: "what to do" }, text: { type: "string", description: "the entry (for write)" }, count: { type: "integer", description: "how many entries to read (default 3, max 10)" } }, required: ["action"] } } },
   { type: "function", function: { name: "habits", description: "The user's habit tracker. action='list'; action='check' ticks one off for today and awards points (name = part of the habit name, or id); action='add' creates one (name, optional target = days per week 1-7); action='del' removes one.", parameters: { type: "object", properties: { action: { type: "string", enum: ["list", "check", "add", "del"], description: "what to do" }, name: { type: "string", description: "habit name or id" }, target: { type: "integer", description: "days per week 1-7 (for add, optional)" } }, required: ["action"] } } },
-  { type: "function", function: { name: "log_expense", description: "Record money the user spent. amount in rupiah, plain number (25000) or short form ('25k'). note = what it was for. Use it whenever the user mentions paying/buying something.", parameters: { type: "object", properties: { amount: { type: "string", description: "how much, e.g. 25000 or 25k" }, note: { type: "string", description: "what for, e.g. 'kopi'" } }, required: ["amount"] } } },
+  { type: "function", function: { name: "log_expense", description: "Money. action='log' (default) records what the user just spent: amount in rupiah, plain number (25000) or short form ('25k'), note = what for, and an optional category as '#makan' inside the note. action='summary' reads this month back: total, per-category breakdown, budget left and the biggest single expense.", parameters: { type: "object", properties: { action: { type: "string", enum: ["log", "summary"], description: "log a new expense, or read the month" }, amount: { type: "string", description: "how much, e.g. 25000 or 25k (for log)" }, note: { type: "string", description: "what for, e.g. 'kopi #makan' (for log)" } } } } },
   { type: "function", function: { name: "countdown", description: "The days-until list (birthdays, deadlines, releases). action='list'; action='add' with name + date as YYYY-MM-DD; action='del' with id.", parameters: { type: "object", properties: { action: { type: "string", enum: ["list", "add", "del"], description: "what to do" }, name: { type: "string", description: "what it is (for add)" }, date: { type: "string", description: "YYYY-MM-DD (for add)" }, id: { type: "integer", description: "countdown id (for del)" } }, required: ["action"] } } },
   { type: "function", function: { name: "sleep", description: "The sleep log. action='bed' when the user goes to bed, 'wake' when they get up (it computes the hours), 'stats' for the last nights. Never guess the hours yourself — always log and read back.", parameters: { type: "object", properties: { action: { type: "string", enum: ["bed", "wake", "stats"], description: "what happened" } }, required: ["action"] } } },
   { type: "function", function: { name: "focus", description: "A focus/deep-work session. action='start' with minutes (the bot goes do-not-disturb); action='done' finishes it and pays points if the time is up; action='stop' gives up early; action='status' shows what is running.", parameters: { type: "object", properties: { action: { type: "string", enum: ["start", "done", "stop", "status"], description: "what to do" }, minutes: { type: "integer", description: "session length (for start)" } }, required: ["action"] } } },
   { type: "function", function: { name: "weather", description: "Current weather + today's forecast for the user's saved location. Pass place once if they name a city (it is remembered).", parameters: { type: "object", properties: { place: { type: "string", description: "city name, only when they name one" } } } } },
   { type: "function", function: { name: "search_all", description: "Search everything the bot knows about the user: long-term memories, saved notes/files, journal entries, reminders, countdowns and the reading list. Use it for 'what did I say about X', 'do I still have that note about Y', 'when was that thing I saved'.", parameters: { type: "object", properties: { query: { type: "string", description: "keywords to look for" } }, required: ["query"] } } },
-  { type: "function", function: { name: "self_check", description: "Run the bot's own health check (KV, database, cron heartbeats, AI endpoint, media worker, backup age) and report whether anything is broken. Free, no model tokens.", parameters: { type: "object", properties: {} } } }
+  { type: "function", function: { name: "self_check", description: "Run the bot's own health check (KV, database, cron heartbeats, AI endpoint, media worker, backup age) and report whether anything is broken. Free, no model tokens.", parameters: { type: "object", properties: {} } } },
+  { type: "function", function: { name: "reading_list", description: "The user's reading list (books/links they want to read). action='list'; 'add' with title; 'done'/'undone' to tick one; 'del' to remove. Identify an item by id or by part of its title.", parameters: { type: "object", properties: { action: { type: "string", enum: ["list", "add", "done", "undone", "del"], description: "what to do" }, title: { type: "string", description: "the title (for add, or to find an item)" }, id: { type: "integer", description: "item id when already known" } }, required: ["action"] } } },
+  { type: "function", function: { name: "capsule", description: "Time capsules: a letter the user writes now that the bot delivers later. action='list'; 'add' with text + when (e.g. '2h', '3d', 'besok 09:00'); 'del' with the pending item number. Use it when the user wants to send a message to their future self.", parameters: { type: "object", properties: { action: { type: "string", enum: ["list", "add", "del"], description: "what to do" }, text: { type: "string", description: "the letter (for add)" }, when: { type: "string", description: "when it should open (for add)" }, id: { type: "integer", description: "pending capsule number (for del)" } }, required: ["action"] } } },
+  { type: "function", function: { name: "headlines", description: "Today's Hacker News front page (title, points, comments, url). Use it for 'what's happening / anything interesting today'. Do not invent headlines if it fails.", parameters: { type: "object", properties: { count: { type: "integer", description: "how many, 1-10 (default 5)" } } } } },
+  { type: "function", function: { name: "shorten", description: "Turn a long URL into a short link on the bot's own domain. Use it whenever the user will want to retype or share a link.", parameters: { type: "object", properties: { url: { type: "string", description: "the http(s) URL" } }, required: ["url"] } } },
+  { type: "function", function: { name: "quest", description: "Quest housekeeping. action='status' shows shields/points/streak; 'shield' buys a streak shield with points; 'reroll' swaps today's daily quest (limited per day).", parameters: { type: "object", properties: { action: { type: "string", enum: ["status", "shield", "reroll"], description: "what to do" } }, required: ["action"] } } }
 ];
 
 export function ddgHost(u) {
@@ -356,6 +366,12 @@ export async function execTool(env, name, argsJson, chatId) {
   if (name === "weather") return agentWeather(env, a);
   if (name === "search_all") return agentSearch(env, chatId || parseInt((await env.KV.get("owner_chat")) || "0", 10), a);
   if (name === "self_check") return agentDoctor(env);
+  if (name === "reading_list") return agentReadingList(env, chatId || parseInt((await env.KV.get("owner_chat")) || "0", 10), a);
+  if (name === "capsule") return agentCapsule(env, a);
+  if (name === "headlines") return agentHeadlines(env, a);
+  if (name === "shorten") return agentShorten(env, a);
+  if (name === "quest") return agentQuest(env, chatId || parseInt((await env.KV.get("owner_chat")) || "0", 10), a);
+
   if (name === "open_url" || (!q && url)) {
     if (!url) return "error: url is empty";
     const t = await fetchPageText(url);
@@ -395,7 +411,7 @@ export function toolLabel(name, argsJson, L) {
     if (act === "del") return L.tlHabitDel + (a.name || a.id || "?");
     return L.tlHabitList;
   }
-  if (name === "log_expense") return L.tlExpense + (a.amount || "?") + (a.note ? " \u2014 " + a.note : "");
+  if (name === "log_expense") return String(a.action || "log").toLowerCase() === "summary" ? L.tlStatus : L.tlExpense + (a.amount || "?") + (a.note ? " \u2014 " + a.note : "");
   if (name === "countdown") {
     const act = String(a.action || "list").toLowerCase();
     if (act === "del") return L.tlCdDel + (a.id || "?");
@@ -416,6 +432,17 @@ export function toolLabel(name, argsJson, L) {
   if (name === "weather") return L.tlWeather + (a.place || a.city || a.q || "");
   if (name === "search_all") return L.tlSearchAll + '"' + (a.query || a.q || "?") + '"';
   if (name === "self_check") return L.tlSelfCheck;
+  if (name === "reading_list") {
+    const act = String(a.action || "list").toLowerCase();
+    return act === "add" ? L.tlReadList + ": " + (a.title || a.text || "?") : L.tlReadList + (act === "list" ? "" : " · " + act + " " + (a.title || a.id || ""));
+  }
+  if (name === "capsule") {
+    const act = String(a.action || "list").toLowerCase();
+    return act === "add" ? L.tlCapsule + ": " + String(a.text || "?").slice(0, 40) + (a.when ? " (" + a.when + ")" : "") : L.tlCapsule + (act === "list" ? "" : " · " + act + " " + (a.id || ""));
+  }
+  if (name === "headlines") return L.tlHeadlines + (a.n || a.count || 5);
+  if (name === "shorten") return L.tlShorten + String(a.url || a.link || "?").slice(0, 60);
+  if (name === "quest") return L.tlQuest + " · " + String(a.action || "status").toLowerCase();
   let q = a.query || a.q || a.keywords || "";
   if (Array.isArray(q)) q = q.join(" ");
   return L.tlSearch + ' "' + (q || "?") + '"';

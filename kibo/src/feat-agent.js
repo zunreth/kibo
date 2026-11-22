@@ -2,14 +2,16 @@
 import {
   SLEEP_LOG_KEY, SLEEP_GN_KEY, HABITS_KEY, EXP_KEY, COUNTDOWN_KEY, COUNTDOWN_MAX, COUNTDOWN_NAME_CAP,
   HABIT_MAX, HABIT_PLAN_KEY, MEM_KEY, CMEM_PREFIX, FILE_INDEX_KEY, READLIST_KEY, WX_LOC_KEY, WX_CTX_KEY,
-  SLEEP_CAP_H,
+  SLEEP_CAP_H, SHIELD_MAX, SHIELD_PRICE,
 } from './consts.js';
 import { getJSON, putJSON } from './base.js';
 import { fmtWIB, UI } from './ui.js';
-import { questDay, XP_PER_LEVEL, journalAdd } from './feat-remind.js';
+import { questDay, XP_PER_LEVEL, journalAdd, shieldBuy, questReroll, REROLL_LIMIT } from './feat-remind.js';
 import {
   habitCheck, expenseAdd, dayWIB, monWIB, rp, wkOf, sleepMark, focusStart, focusEnd, focusState,
+  expSummary, expBudget, capsuleItems, capsulePending, capsuleAdd, capsuleDel,
 } from './feat-life.js';
+import { rlItems, rlAddCore, rlSetDone, rlRemove, shorten, hnTop } from './feat-b8.js';
 import { getActiveCard } from './feat-chars.js';
 import { geocode, wxLine } from './feat-ctx.js';
 import { doctorChecks, doctorLine, doctorLang, BAD, UNKNOWN } from './feat-doctor.js';
@@ -193,10 +195,23 @@ export async function agentHabits(env, a) {
 export async function agentExpense(env, a) {
   const amt = a && (a.amount ?? a.amt ?? a.value);
   const note = esc1(a && (a.note || a.text || a.for));
+  if (/^(summary|list|read|stats|report)$/i.test(String((a && a.action) || ""))) {
+    const mon = monWIB(nowS());
+    const arr = (await getJSON(env, EXP_KEY, [])).filter(e => e && typeof e.amt === "number");
+    const sum = expSummary(arr, mon, await expBudget(env));
+    if (!sum.rows.length) return "no spending logged in " + mon + " yet";
+    const lines = ["spending " + mon + ": " + rp(sum.total) + " across " + sum.rows.length + " entries"];
+    for (const c of sum.cats) lines.push("· " + c.cat + ": " + rp(c.amt) + " (" + c.n + " entries, " + Math.round(c.amt / sum.total * 100) + "%)" + (sum.catCaps[c.cat] ? " of " + rp(sum.catCaps[c.cat]) : ""));
+    if (sum.cap) lines.push("monthly budget " + rp(sum.cap) + " — " + (sum.left >= 0 ? rp(sum.left) + " left (" + sum.pct + "% used)" : "over by " + rp(-sum.left)));
+    const big = sum.rows.slice().sort((x, y) => y.amt - x.amt)[0];
+    if (big) lines.push("biggest: " + rp(big.amt) + " — " + esc1(big.note || "-"));
+    return lines.join("\n");
+  }
   if (amt === undefined || amt === null || String(amt).trim() === "") return "error: how much? pass amount (e.g. 25000 or \"25k\")";
   const r = await expenseAdd(env, amt, note);
   if (!r.ok) return "error: could not read that amount (" + esc1(amt) + ") — pass a plain number like 25000 or 25k";
-  return "logged " + rp(r.amt) + (r.note ? " — " + r.note : "") + " · this month " + rp(r.total) + " across " + r.n + " entries";
+  return "logged " + rp(r.amt) + (r.note ? " — " + r.note : "") + (r.cat && r.cat !== "other" ? " [" + r.cat + "]" : "") +
+    " · this month " + rp(r.total) + " across " + r.n + " entries" + (r.cap ? " (" + (r.left >= 0 ? rp(r.left) + " left of " + rp(r.cap) : "over budget by " + rp(-r.left)) + ")" : "");
 }
 
 export async function agentCountdown(env, a) {
@@ -286,13 +301,14 @@ export async function agentSearch(env, chatId, a) {
   const q = esc1(a && (a.query || a.q)).toLowerCase();
   if (!q) return "error: what should I search for?";
   const card = await getActiveCard(env).catch(() => null);
-  const [mems, files, journal, remObj, cd, rl] = await Promise.all([
+  const [mems, files, journal, remObj, cd, rl, caps] = await Promise.all([
     getJSON(env, card ? CMEM_PREFIX + card.id : MEM_KEY, []),
     getJSON(env, FILE_INDEX_KEY, []),
     getJSON(env, "journal", []),
     getJSON(env, "reminders", {}),
     getJSON(env, COUNTDOWN_KEY, []),
     getJSON(env, READLIST_KEY + (chatId || 0), { list: [] }),
+    capsuleItems(env).catch(() => []),
   ]);
   const hit = s => String(s == null ? "" : s).toLowerCase().includes(q);
   const out = [];
@@ -302,7 +318,8 @@ export async function agentSearch(env, chatId, a) {
   for (const k of Object.keys(remObj || {})) { const r = remObj[k]; if (r && !r.done && hit(r.text)) out.push("reminder #" + k + " (" + fmtWIB(r.at) + "): " + esc1(r.text)); }
   for (const c of (cd || [])) if (c && hit(c.name)) out.push("countdown #" + c.id + ": " + esc1(c.name) + " — " + c.day);
   for (const i of ((rl && rl.list) || [])) if (i && hit(i.title)) out.push("reading list: " + esc1(i.title) + (i.done ? " (done)" : ""));
-  if (!out.length) return "nothing found for \"" + q + "\" in memories, saved notes, journal, reminders, countdowns or the reading list";
+  for (const c of (caps || [])) if (c && !c.fired && (hit(c.text) || hit(fmtWIB(c.due)))) out.push("time capsule (opens " + fmtWIB(c.due) + "): " + esc1(c.text).slice(0, 160));
+  if (!out.length) return "nothing found for \"" + q + "\" in memories, saved notes, journal, reminders, countdowns, the reading list or the time capsules";
   const shown = out.slice(0, 12);
   return "found " + out.length + " hit(s) for \"" + q + "\":\n" + shown.join("\n") + (out.length > shown.length ? "\n… and " + (out.length - shown.length) + " more" : "");
 }
@@ -314,4 +331,106 @@ export async function agentDoctor(env) {
   const unk = checks.filter(c => c.state === UNKNOWN);
   return "kibo self check:\n" + checks.map(c => doctorLine(L, c)).join("\n") +
     "\nverdict: " + (bad.length ? bad.length + " problem(s) — " + bad.map(c => c.k).join(", ") : "all good") + (unk.length ? " (" + unk.length + " unknown)" : "");
+}
+
+
+export async function agentReadingList(env, chatId, a) {
+  const action = String((a && a.action) || "list").toLowerCase();
+  const cid = chatId || 0;
+  const items = (await rlItems(env, cid)).filter(x => x && x.title);
+  const line = x => "\u2022 #" + x.id + " " + esc1(x.title) + (x.done ? " (read)" : "");
+  if (action === "add" || action === "new") {
+    const t = esc1(a && (a.title || a.text || a.name));
+    if (!t) return "error: what should be added? pass title";
+    const r = await rlAddCore(env, cid, t);
+    if (!r.ok) return r.why === "full" ? "error: the reading list is full (" + r.max + ") — remove something first" : "error: the title is empty";
+    return "added to the reading list: \"" + r.title + "\" (#" + r.id + ", " + r.n + " items)";
+  }
+  if (!items.length) return "the reading list is empty";
+  if (action !== "list") {
+    const q = esc1(a && (a.id ?? a.title ?? a.name)).toLowerCase().replace(/^#/, "");
+    if (!q) return "error: which item? pass id or title";
+    let hit = items.find(x => String(x.id) === q) || items.find(x => x.title.toLowerCase() === q);
+    if (!hit) {
+      const hits = items.filter(x => x.title.toLowerCase().includes(q));
+      if (hits.length > 1) return "several items match \"" + q + "\": " + hits.map(line).join(" | ") + " — call again with the exact id";
+      hit = hits[0];
+    }
+    if (!hit) return "error: nothing in the reading list matches \"" + q + "\"";
+    if (action === "del" || action === "delete" || action === "remove") {
+      await rlRemove(env, cid, hit.id);
+      return "removed \"" + esc1(hit.title) + "\" from the reading list (" + (items.length - 1) + " left)";
+    }
+    const want = action === "done" || action === "read" || action === "finish";
+    const nx = await rlSetDone(env, cid, hit.id, want);
+    return "\"" + esc1(hit.title) + "\" marked " + (want ? "read" : "unread") + " · " + items.filter(x => (x.id === hit.id ? want : !!x.done)).length + "/" + items.length + " read";
+  }
+  const done = items.filter(x => x.done).length;
+  return "reading list (" + done + "/" + items.length + " read):\n" + items.map(line).join("\n");
+}
+
+export async function agentCapsule(env, a) {
+  const action = String((a && a.action) || "list").toLowerCase();
+  if (action === "add" || action === "new" || action === "seal" || action === "write") {
+    const text = esc1(a && (a.text || a.body || a.content || a.letter));
+    const when = esc1(a && (a.when || a.after || a.delay || a.in));
+    if (!text) return "error: what should the letter say? pass text";
+    if (!when) return "error: when should it open? pass when (e.g. \"2h\", \"30m\", \"besok 09:00\")";
+    const r = await capsuleAdd(env, when + " " + text);
+    if (!r.ok) {
+      if (r.why === "soon") return "error: a capsule has to open at least " + r.min + " minutes from now";
+      if (r.why === "full") return "error: too many pending capsules (" + r.max + ") — delete one first";
+      if (r.why === "bad") return "error: could not read the time \"" + when + "\" — examples: 2h, 30m, 3d, besok 09:00";
+      return "error: the letter is empty";
+    }
+    return "time capsule sealed — it opens " + fmtWIB(r.due) + " (\"" + esc1(r.text).slice(0, 60) + "\")";
+  }
+  if (action !== "list") {
+    const n = parseInt(esc1(a && (a.id ?? a.n ?? a.index)).replace(/^#/, ""), 10);
+    const r = await capsuleDel(env, n);
+    if (!r.ok) return "error: there is no pending capsule number " + (Number.isFinite(n) ? n : "?") + " — call capsule action=list to see the numbering";
+    return "capsule deleted (\"" + esc1(r.text).slice(0, 60) + "\")";
+  }
+  const pend = capsulePending(await capsuleItems(env));
+  if (!pend.length) return "no sealed capsules waiting";
+  return "sealed capsules (" + pend.length + "):\n" + pend.map((c, i) => (i + 1) + ". opens " + fmtWIB(c.due) + " — " + esc1(c.text).slice(0, 80)).join("\n");
+}
+
+export async function agentHeadlines(env, a) {
+  const n = Math.min(10, Math.max(1, parseInt((a && (a.count || a.n)) || 5, 10) || 5));
+  const hits = await hnTop(env, n);
+  if (!hits.length) return "error: the HN front page could not be fetched right now — say so plainly, do not invent headlines";
+  return "hacker news front page (verified, " + hits.length + "):\n" +
+    hits.map((h, i) => (i + 1) + ". " + esc1(h.t) + " — " + h.p + " pts, " + h.c + " comments — " + h.u).join("\n");
+}
+
+export async function agentShorten(env, a) {
+  const url = esc1(a && (a.url || a.link));
+  if (!url) return "error: which URL? pass url";
+  const r = await shorten(env, url);
+  if (r.ok) return "short link: " + r.short + " → " + r.url;
+  if (r.why === "bad") return "error: that does not look like an http(s) link (max " + r.max + " characters)";
+  if (r.why === "nohost") return "error: no short-link host is configured, so links cannot be shortened";
+  return "error: url is empty";
+}
+
+export async function agentQuest(env, chatId, a) {
+  const action = String((a && a.action) || "status").toLowerCase();
+  const cid = chatId || parseInt((await env.KV.get("owner_chat")) || "0", 10);
+  const q = await getJSON(env, "quest", {});
+  if (/^(shield|buy|buy_shield)$/.test(action)) {
+    const r = await shieldBuy(env);
+    if (r.ok) return "shield bought: " + r.shields + "/" + SHIELD_MAX + " held, " + r.points + " points left (-" + r.price + ")";
+    if (r.why === "max") return "error: shields are already full (" + r.max + ") — no point buying another";
+    return "error: not enough points for a shield (" + r.price + " needed, " + r.points + " left) — say so, do not promise one";
+  }
+  if (action === "reroll" || action === "swap") {
+    const r = await questReroll(env, cid, true);
+    if (r === "ok") return "daily quest rerolled — the new one has been posted to the user";
+    if (r === "limit") return "error: the reroll limit for today (" + REROLL_LIMIT + ") is used up";
+    return "error: too fast — a reroll was just requested; wait a moment";
+  }
+  const shields = q.shields || 0;
+  return "quest housekeeping:\nshields " + shields + "/" + SHIELD_MAX + " (cost " + SHIELD_PRICE + " points) · points " + num(q.points) +
+    " · streak " + (q.streak || 0) + "\nbuy one with the quest tool (action=shield), reroll today's quest with action=reroll";
 }

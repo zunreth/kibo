@@ -12,6 +12,7 @@ import {
   HABIT_WEEK_PTS, HABIT_MS, HABIT_WK_MS, LIFE_NOTE_KEY, LIFE_NOTE_MAX,
   HABIT_PLAN_KEY, HABIT_PLAN_HABITS_MAX,
   CAPSULE_PEND_MAX, CAPSULE_ARCH_MAX, CAPSULE_TEXT_CAP, CAPSULE_MIN_GAP,
+  EXP_BUDGET_KEY, EXP_CAT_DEFAULT, EXP_CAT_CAP, FOCUS_LOG_KEY, FOCUS_LOG_MAX,
 } from './consts.js';
 import { getJSON, putJSON, reply, notify, esc, mdTg, tg, delCmd } from './base.js';
 import { uiLang, fmtWIB, UI_SEP } from './ui.js';
@@ -70,6 +71,12 @@ export async function focusEnd(env, how) {
   await putJSON(env, FOCUS_KEY, Object.assign({}, st, { settled: true }));
   const min = Math.round(st.dur / 60);
   if (how === "done" && sec >= end && sec <= end + FOCUS_GRACE) {
+    try {
+      const log = (await getJSON(env, FOCUS_LOG_KEY, [])).filter(x => x && x.ts);
+      log.unshift({ ts: sec, min });
+      while (log.length > FOCUS_LOG_MAX) log.pop();
+      await putJSON(env, FOCUS_LOG_KEY, log);
+    } catch (_) {}
     await addPts(env, FOCUS_PTS);
     const wallet = ((await getJSON(env, "quest", {})).points) || 0;
     return { ok: true, outcome: "claim", min, pts: FOCUS_PTS, wallet };
@@ -300,6 +307,26 @@ function parseAmt(tok) {
   if (!isFinite(n) || n <= 0 || n > 1e12) return null;
   return Math.floor(n);
 }
+export function parseMoney(tok) {
+  const m = String(tok == null ? "" : tok).replace(/[^\d.,a-zA-Z]/g, "").match(/^(\d+(?:[.,]\d+)?)(k|rb|ribu|jt|juta|m)?$/i);
+  if (!m) return null;
+  const mult = /^(k|rb|ribu)$/i.test(m[2] || "") ? 1e3 : /^(jt|juta|m)$/i.test(m[2] || "") ? 1e6 : 1;
+  const n = parseFloat(m[1].replace(",", ".")) * mult;
+  if (!isFinite(n) || n <= 0 || n > 1e12) return null;
+  return Math.floor(n);
+}
+const CAT_RE = /(?:^|\s)#([\p{L}0-9_-]{1,20})/gu;
+export function splitCat(note) {
+  const raw = String(note == null ? "" : note);
+  const cats = [];
+  let m;
+  CAT_RE.lastIndex = 0;
+  while ((m = CAT_RE.exec(raw)) !== null) cats.push(m[1].toLowerCase());
+  if (!cats.length) return { note: raw.trim(), cat: "" };
+  CAT_RE.lastIndex = 0;
+  const clean = raw.replace(CAT_RE, " ").replace(/\s+/g, " ").trim();
+  return { note: clean, cat: cats[0].slice(0, EXP_CAT_CAP) };
+}
 function mtdOf(arr, mon) {
   const rows = arr.filter(e => monWIB(Math.floor(e.ts / 1000)) === mon);
   const total = rows.reduce((a, b) => a + b.amt, 0);
@@ -307,77 +334,155 @@ function mtdOf(arr, mon) {
   return { rows, total, big };
 }
 const bigTxt = b => (b ? rp(b.amt) + " \u2014 " + esc(b.note || "-") : "-");
+
+export function expSummary(arr, mon, budget) {
+  const { rows, total, big } = mtdOf(arr, mon);
+  const byCat = new Map();
+  for (const e of rows) {
+    const c = String(e.cat || EXP_CAT_DEFAULT).toLowerCase();
+    const cur = byCat.get(c) || { cat: c, amt: 0, n: 0 };
+    cur.amt += e.amt; cur.n += 1;
+    byCat.set(c, cur);
+  }
+  const cats = Array.from(byCat.values()).sort((a, b) => b.amt - a.amt);
+  const cap = Number(budget && budget.total) || 0;
+  return { mon, rows, total, big, cats, catCaps: (budget && budget.cats) || {}, cap, left: cap ? cap - total : 0, pct: cap ? Math.round(total / cap * 100) : 0 };
+}
+export function expCatLines(L, s, max) {
+  if (!s.cats.length) return "";
+  return s.cats.slice(0, max || 5).map(c => {
+    const pct = s.total ? Math.round(c.amt / s.total * 100) : 0;
+    const cap = s.catCaps && s.catCaps[c.cat] ? " / " + rp(s.catCaps[c.cat]) : "";
+    return L.bCatRow(c.cat, rp(c.amt) + cap, pct);
+  }).join("\n");
+}
+export function expBudgetLine(L, s) {
+  if (!s.cap) return L.bNoBudget;
+  if (s.pct > 100) return L.bOver(rp(s.total), rp(s.cap), s.pct, rp(-s.left));
+  const filled = Math.min(10, Math.max(0, Math.round(s.pct / 10)));
+  return L.bBudget(rp(s.total), rp(s.cap), s.pct, rp(s.left), "\u2588".repeat(filled) + "\u2591".repeat(10 - filled));
+}
+function budgetCard(L, s) {
+  const body = [L.bMtd(rp(s.total), s.rows.length, bigTxt(s.big)), expBudgetLine(L, s)];
+  const cats = expCatLines(L, s, 6);
+  if (cats) body.push(cats);
+  return body.join("\n");
+}
+export async function expBudget(env) {
+  const b = await getJSON(env, EXP_BUDGET_KEY, null);
+  return { total: Number(b && b.total) || 0, cats: (b && b.cats) || {} };
+}
+export async function setBudget(env, total, cat) {
+  const b = await expBudget(env);
+  if (cat) {
+    const n = Math.max(0, Math.round(total));
+    if (n) b.cats[cat] = n; else delete b.cats[cat];
+  } else b.total = Math.max(0, Math.round(total));
+  await putJSON(env, EXP_BUDGET_KEY, b);
+  return b;
+}
 export async function handleBeli(env, msg, chatId) {
   const L = await uiLang(env);
   const raw = (msg.text || "").replace(/^\/\S+\s*/, "").trim();
   const arr = (await getJSON(env, EXP_KEY, [])).filter(e => e && typeof e.amt === "number");
   const mon = monWIB(nowS());
-  if (!raw || raw.toLowerCase() === "recap") {
-    const { rows, total, big } = mtdOf(arr, mon);
-    if (raw.toLowerCase() === "recap") {
-      const top = rows.slice().sort((a, b) => b.amt - a.amt).slice(0, 5).map(e => "\u2022 " + rp(e.amt) + " \u2014 " + esc(e.note || "-")).join("\n");
-      return reply(env, chatId, L.bHead + "\n" + L.bMtd(rp(total), rows.length, bigTxt(big)) + (top ? "\n" + top : ""));
+  const low = raw.toLowerCase();
+  const budget = await expBudget(env);
+  if (/^(budget|bujet)\b/.test(low)) {
+    const toks = raw.replace(/^\S+\s*/, "").trim().split(/\s+/).filter(Boolean);
+    if (!toks.length) { const s = expSummary(arr, mon, budget); return reply(env, chatId, L.bHead + "\n" + budgetCard(L, s)); }
+    const amt = parseMoney(toks[toks.length - 1]);
+    const cat = toks.length > 1 ? toks[0].toLowerCase() : "";
+    if (amt === null) return reply(env, chatId, L.bBudgetBad);
+    const nb = await setBudget(env, amt, cat);
+    const s = expSummary(arr, mon, nb);
+    return reply(env, chatId, (cat ? L.bBudgetCat(cat, rp(amt)) : L.bBudgetSet(rp(amt))) + "\n" + budgetCard(L, s));
+  }
+  if (!raw || low === "recap") {
+    const s = expSummary(arr, mon, budget);
+    if (low === "recap") {
+      const top = s.rows.slice().sort((a, b) => b.amt - a.amt).slice(0, 5).map(e => "\u2022 " + rp(e.amt) + " \u2014 " + esc(e.note || "-") + (e.cat ? " #" + esc(e.cat) : "")).join("\n");
+      return reply(env, chatId, L.bHead + "\n" + L.bMtd(rp(s.total), s.rows.length, bigTxt(s.big)) + (top ? "\n" + top : ""));
     }
-    return reply(env, chatId, L.bHead + "\n" + L.bMtd(rp(total), rows.length, bigTxt(big)) + "\n" + L.bUsage);
+    return reply(env, chatId, L.bHead + "\n" + budgetCard(L, s) + "\n" + L.bUsage);
   }
   const sp = raw.indexOf(" ");
   const amt = parseAmt(sp < 0 ? raw : raw.slice(0, sp));
-  const note = (sp < 0 ? "" : raw.slice(sp + 1)).trim().slice(0, EXP_NOTE_CAP);
+  const parsed = splitCat(sp < 0 ? "" : raw.slice(sp + 1));
+  const note = parsed.note.slice(0, EXP_NOTE_CAP);
   if (amt === null) return reply(env, chatId, L.bBad);
-  arr.unshift({ ts: Date.now(), amt, note });
+  arr.unshift(parsed.cat ? { ts: Date.now(), amt, note, cat: parsed.cat } : { ts: Date.now(), amt, note });
   while (arr.length > EXP_MAX) arr.pop();
   await putJSON(env, EXP_KEY, arr);
-  const { total } = mtdOf(arr, mon);
-  return reply(env, chatId, L.bOk(rp(amt), note ? esc(note) : "-", rp(total)));
+  const sum = expSummary(arr, mon, await expBudget(env));
+  return reply(env, chatId, L.bOk(rp(amt), esc(note || "-"), rp(sum.total) + (sum.cap ? " " + expBudgetLine(L, sum) : "")) + (parsed.cat ? "\n" + L.bCatAdded(parsed.cat) : ""));
 }
 
 export async function expenseAdd(env, amtTok, note) {
   const amt = parseAmt(String(amtTok == null ? "" : amtTok).replace(/[^\d.,k rbK RB]/gi, ""));
   if (amt === null) return { ok: false, why: "bad" };
   const arr = (await getJSON(env, EXP_KEY, [])).filter(e => e && typeof e.amt === "number");
-  arr.unshift({ ts: Date.now(), amt, note: String(note || "").trim().slice(0, EXP_NOTE_CAP) });
+  const parsed = splitCat(note);
+  const rec = { ts: Date.now(), amt, note: parsed.note.slice(0, EXP_NOTE_CAP) };
+  if (parsed.cat) rec.cat = parsed.cat;
+  arr.unshift(rec);
   while (arr.length > EXP_MAX) arr.pop();
   await putJSON(env, EXP_KEY, arr);
-  const { rows, total } = mtdOf(arr, monWIB(nowS()));
-  return { ok: true, amt, note: String(note || "").trim().slice(0, EXP_NOTE_CAP), total, n: rows.length };
+  const sum = expSummary(arr, monWIB(nowS()), await expBudget(env));
+  return { ok: true, amt, note: rec.note, cat: parsed.cat || EXP_CAT_DEFAULT, total: sum.total, n: sum.rows.length, left: sum.left, cap: sum.cap };
 }
 
 export { dayWIB, monWIB, rp, wkOf };
 
-export async function handleCapsule(env, msg, chatId) {
-  const L = await uiLang(env);
-  const raw = (msg.text || "").replace(/^\/\S+\s*/, "").trim();
-  const sec = nowS();
-  const arr = (await getJSON(env, CAPSULE_KEY, [])).filter(c => c && c.text);
-  if (!raw) {
-    const pend = arr.filter(c => !c.fired);
-    const rows = pend.map((c, i) => (i + 1) + ". " + fmtWIB(c.due, L) + " \u2014 " + esc(c.text.slice(0, 40)) + (c.text.length > 40 ? "\u2026" : "")).join("\n");
-    return reply(env, chatId, L.cHead + "\n" + (rows || L.cEmpty) + "\n" + L.cUsage);
-  }
-  if (/^del\s+\d+$/i.test(raw)) {
-    const n = parseInt(raw.split(/\s+/)[1], 10);
-    const pend = arr.filter(c => !c.fired);
-    if (!pend[n - 1]) return reply(env, chatId, L.cGone);
-    pend[n - 1].fired = -1;
-    while (arr.length > CAPSULE_PEND_MAX + CAPSULE_ARCH_MAX) arr.pop();
-    await putJSON(env, CAPSULE_KEY, arr);
-    return notify(env, chatId, L.cDelOk);
-  }
-  const toks = raw.split(/\s+/);
+export async function capsuleItems(env) {
+  return (await getJSON(env, CAPSULE_KEY, [])).filter(c => c && c.text);
+}
+export function capsulePending(arr) { return (arr || []).filter(c => c && c.text && !c.fired); }
+export async function capsuleAdd(env, raw, atSec) {
+  const sec = atSec || nowS();
+  const arr = await capsuleItems(env);
+  const toks = String(raw || "").trim().split(/\s+/).filter(Boolean);
+  if (toks.length < 2) return { ok: false, why: "short" };
   let due = null, mi = 0;
   for (let len = Math.min(5, toks.length - 1); len >= 1; len--) {
     const t = parseRemind(toks.slice(0, len).join(" "), sec);
     if (t) { due = t; mi = len; break; }
   }
-  if (!due) return reply(env, chatId, L.cBad);
+  if (!due) return { ok: false, why: "bad" };
   const text = toks.slice(mi).join(" ").slice(0, CAPSULE_TEXT_CAP);
-  if (!text) return reply(env, chatId, L.cShort);
-  if (due < sec + CAPSULE_MIN_GAP) return reply(env, chatId, L.cSoon);
-  if (arr.filter(c => !c.fired).length >= CAPSULE_PEND_MAX) return reply(env, chatId, L.cFull(CAPSULE_PEND_MAX));
+  if (!text) return { ok: false, why: "short" };
+  if (due < sec + CAPSULE_MIN_GAP) return { ok: false, why: "soon", min: Math.round(CAPSULE_MIN_GAP / 60) };
+  if (capsulePending(arr).length >= CAPSULE_PEND_MAX) return { ok: false, why: "full", max: CAPSULE_PEND_MAX };
   arr.unshift({ created: sec, due, text, fired: 0 });
   while (arr.length > CAPSULE_PEND_MAX + CAPSULE_ARCH_MAX) arr.pop();
   await putJSON(env, CAPSULE_KEY, arr);
-  return reply(env, chatId, L.cOk(fmtWIB(due, L)));
+  return { ok: true, due, text };
+}
+export async function capsuleDel(env, n) {
+  const arr = await capsuleItems(env);
+  const pend = capsulePending(arr);
+  const idx = parseInt(n, 10);
+  if (!Number.isFinite(idx) || idx < 1 || !pend[idx - 1]) return { ok: false, why: "gone" };
+  pend[idx - 1].fired = -1;
+  while (arr.length > CAPSULE_PEND_MAX + CAPSULE_ARCH_MAX) arr.pop();
+  await putJSON(env, CAPSULE_KEY, arr);
+  return { ok: true, text: pend[idx - 1].text };
+}
+export async function handleCapsule(env, msg, chatId) {
+  const L = await uiLang(env);
+  const raw = (msg.text || "").replace(/^\/\S+\s*/, "").trim();
+  if (!raw) {
+    const pend = capsulePending(await capsuleItems(env));
+    const rows = pend.map((c, i) => (i + 1) + ". " + fmtWIB(c.due, L) + " \u2014 " + esc(c.text.slice(0, 40)) + (c.text.length > 40 ? "\u2026" : "")).join("\n");
+    return reply(env, chatId, L.cHead + "\n" + (rows || L.cEmpty) + "\n" + L.cUsage);
+  }
+  if (/^del\s+\d+$/i.test(raw)) {
+    const r = await capsuleDel(env, raw.split(/\s+/)[1]);
+    return r.ok ? notify(env, chatId, L.cDelOk) : reply(env, chatId, L.cGone);
+  }
+  const r = await capsuleAdd(env, raw);
+  if (!r.ok) return reply(env, chatId, r.why === "full" ? L.cFull(CAPSULE_PEND_MAX) : r.why === "soon" ? L.cSoon : r.why === "bad" ? L.cBad : L.cShort);
+  return reply(env, chatId, L.cOk(fmtWIB(r.due, L)));
 }
 
 async function capsuleCron(env, nowSec) {

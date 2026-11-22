@@ -80,6 +80,15 @@ export const HABIT_MAX = 7, HABIT_PTS = 1;
 export const EXP_KEY = "exp_log";
 export const EXP_MAX = 400, EXP_NOTE_CAP = 80;
 export const EXP_MONTH_KEY = "exp_recap_month";
+export const EXP_BUDGET_KEY = "exp_budget";
+export const EXP_CAT_CAP = 20;
+export const EXP_CAT_DEFAULT = "other";
+export const FOCUS_LOG_KEY = "focus_log";
+export const FOCUS_LOG_MAX = 60;
+export const BRIEF_KEY = "brief_cfg";
+export const BRIEF_DEFAULT_H = 6;
+export const NOW_KEY = "now_board";
+
 export const CAPSULE_KEY = "capsules";
 export const CAPSULE_PEND_MAX = 10, CAPSULE_ARCH_MAX = 20, CAPSULE_TEXT_CAP = 500, CAPSULE_MIN_GAP = 600;
 
@@ -260,7 +269,7 @@ export const CHAIN_SHIELD = 1;
 export const CHAIN_GEN_STALE_MS = 180000;
 export const SYS_MEM_EXTRACT = "You extract durable personal facts from a conversation log between the user and their assistant kibo. Find at most 3 NEW facts worth remembering long-term: stable things about the user (preferences, skills, home, work, ongoing projects, relationships, pets, health, schedule). NOT one-off moods, NOT questions, NOT small talk, NOT anything already listed under KNOWN FACTS (already saved - if everything new is already covered, output DONE). Output format: one fact per line, plain text, no bullets, no numbering, no commentary, no thinking out loud. Max 30 words per fact, written from the assistant's perspective (about the user). If nothing qualifies, output exactly DONE.";
 export const SYS_CHAIN = "You generate a tiny 5-day quest arc for the user's Telegram bot companion. Reply with EXACTLY one line, pipe-separated, NO extra text, no markdown, no quotes: ArcName | step1 | step2 | step3 | step4 | step5. ArcName = a catchy title (max 6 words) for a fun, imaginative mini-adventure rooted in everyday life — habits, fitness, productivity, learning, a cozy hobby, or a small personal project. Frame it like a light RPG challenge so it feels exciting, but keep it believable: the 5 steps are a connected journey (day 1 an easy warm-up, days 2-4 climbing the arc, day 5 a satisfying finish). Each step = a short vivid label (max 8 words) the user can picture themselves doing. Make it fun, punchy, and a little playful — but NOT absurd, cartoonish, or slapstick (no talking animals, no stealing, no magical hijinks). Each step builds on the previous.";
-export const BOT_VER = "2.82.0";
+export const BOT_VER = "2.83.0";
 
 export const EDIT_MARKER = "//";
 export const EDIT_SIM_MIN = 0.8;

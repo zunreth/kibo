@@ -88,8 +88,9 @@ async function checkNH(env) {
 async function checkBackup(env) {
   let raw = null;
   try { raw = await env.KV.get(BACKUP_STAMP_KEY); } catch (_) { return { k: "backup", state: UNKNOWN } }
-  const ts = Number(String(raw || "").trim());
-  if (!raw || !ts) return { k: "backup", state: UNKNOWN, why: "no stamp yet" };
+  let ts = Number(String(raw == null ? "" : raw).replace(/["';\s]/g, ""));
+  if (ts > 0 && ts < 1e12) ts *= 1000;
+  if (!raw || !ts || !isFinite(ts)) return { k: "backup", state: UNKNOWN, why: "no stamp yet" };
   const age = Date.now() - ts;
   return { k: "backup", state: age > BACKUP_STALE_MS ? BAD : OK, ageMs: age };
 }
