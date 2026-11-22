@@ -6,7 +6,7 @@ export const CRON_BEAT_WRITE_MS = 5 * 60 * 1000;
 
 export const CRON_JOBS = [
   ["cron", 1], ["stats", 1], ["nuke", 1], ["d1", 1], ["shadow", 1], ["delq", 1],
-  ["nhwatch", 1], ["dive", 1], ["divegen", 1], ["gameidle", 1]
+  ["nhwatch", 1], ["dive", 1], ["divegen", 1], ["gameidle", 1], ["brief", 1], ["todo", 1]
 ];
 
 export function cronStaleAt(job, ts) {

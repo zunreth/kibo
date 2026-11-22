@@ -60,6 +60,7 @@ import {
   setLiveCtx,
   setLastCf,
 } from './consts.js';
+import { auditBefore, auditAfter, undoAudit } from './feat-audit.js';
 import {
   esc,
   mdTg,
@@ -177,7 +178,8 @@ export const TOOLS_AGENT = [
   { type: "function", function: { name: "headlines", description: "Today's Hacker News front page (title, points, comments, url). Use it for 'what's happening / anything interesting today'. Do not invent headlines if it fails.", parameters: { type: "object", properties: { count: { type: "integer", description: "how many, 1-10 (default 5)" } } } } },
   { type: "function", function: { name: "shorten", description: "Turn a long URL into a short link on the bot's own domain. Use it whenever the user will want to retype or share a link.", parameters: { type: "object", properties: { url: { type: "string", description: "the http(s) URL" } }, required: ["url"] } } },
   { type: "function", function: { name: "quest", description: "Quest housekeeping. action='status' shows shields/points/streak; 'shield' buys a streak shield with points; 'reroll' swaps today's daily quest (limited per day).", parameters: { type: "object", properties: { action: { type: "string", enum: ["status", "shield", "reroll"], description: "what to do" } }, required: ["action"] } } },
-  { type: "function", function: { name: "todo", description: "The user's task list (things to do, as opposed to reminders which fire at a moment). action='list'; 'add' with text (+ optional due like 'besok 09:00' or '2026-12-01', + rec='daily'/'weekly' to repeat); 'done' / 'del' / 'snooze' with id (or part of the text) — snooze also needs due.", parameters: { type: "object", properties: { action: { type: "string", enum: ["list", "add", "done", "del", "snooze"], description: "what to do" }, text: { type: "string", description: "task text (for add) or part of it (to find one)" }, id: { type: "integer", description: "task id when known" }, due: { type: "string", description: "when it is due (add/snooze), e.g. '2h', 'besok 09:00', '2026-12-01'" }, rec: { type: "string", enum: ["daily", "weekly"], description: "repeat this task after it is done (optional)" } }, required: ["action"] } } }
+  { type: "function", function: { name: "todo", description: "The user's task list (things to do, as opposed to reminders which fire at a moment). action='list'; 'add' with text (+ optional due like 'besok 09:00' or '2026-12-01', + rec='daily'/'weekly' to repeat); 'done' / 'del' / 'snooze' with id (or part of the text) — snooze also needs due.", parameters: { type: "object", properties: { action: { type: "string", enum: ["list", "add", "done", "del", "snooze"], description: "what to do" }, text: { type: "string", description: "task text (for add) or part of it (to find one)" }, id: { type: "integer", description: "task id when known" }, due: { type: "string", description: "when it is due (add/snooze), e.g. '2h', 'besok 09:00', '2026-12-01'" }, rec: { type: "string", enum: ["daily", "weekly"], description: "repeat this task after it is done (optional)" } }, required: ["action"] } } },
+  { type: "function", function: { name: "undo", description: "Undo the most recent write you made to the user's data (a reminder, expense, habit, journal entry, todo, etc.). Use it when the user says the last change was wrong or asks to undo it. Pass id only if you are undoing a specific older entry; omit it to undo the newest.", parameters: { type: "object", properties: { id: { type: "string", description: "audit id to undo (optional; omit = newest)" } } } } }
 ];
 
 export function ddgHost(u) {
@@ -322,6 +324,11 @@ export async function execTool(env, name, argsJson, chatId) {
   let q = a.query || a.q || a.keywords || "";
   if (Array.isArray(q)) q = q.join(" ");
   const url = a.url || a.link || "";
+  if (name === "undo") {
+    const r = await undoAudit(env, a.id ? String(a.id) : "");
+    if (r.ok) return "undone: " + String((r.entry && (r.entry.label || r.entry.tool)) || "last change") + " — the previous state is restored";
+    return "nothing to undo" + (r.why === "expired" ? " (the snapshot already expired)" : "");
+  }
   if (name === "remember") {
     const card = await getActiveCard(env);
     const id = await saveMemory(env, a.text, card ? CMEM_PREFIX + card.id : MEM_KEY);
@@ -696,7 +703,10 @@ export async function* agentChat(env, msgs, chatId, extSig, turnTs, startMode, n
         res = "(duplicate: " + calls[i].function.name + " was already called with the exact same parameters in a previous step \u2014 the result CANNOT be different. DO NOT call the tool again, answer the user now using the info you already have.)";
       } else {
         seenQ.add(qkey);
-        try { res = await execTool(env, calls[i].function.name, t.args, chatId); } catch (e) { res = "error: " + ((e && e.message) || e); }
+        const tname = calls[i].function.name;
+        const snap = await auditBefore(env, tname, chatId);
+        try { res = await execTool(env, tname, t.args, chatId); } catch (e) { res = "error: " + ((e && e.message) || e); }
+        if (snap) { try { const aid = await auditAfter(env, snap, toolLabel(tname, t.args, L)); if (aid) env.__lastAudit = aid; } catch (_) {} }
       }
       res = String(res);
 

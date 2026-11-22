@@ -8,6 +8,7 @@ export const CATS = ["daily", "money", "ai", "story", "media", "fun", "system"];
 export const COMMANDS = [
   { c: "help", cat: "system", d: "help by category (or the full searchable list)", ex: "/help" },
   { c: "menu", cat: "system", d: "button panel (char/remind/rss/memory)", ex: "/menu" },
+  { c: "audit", cat: "system", d: "see or undo the last AI changes to your data", ex: "/audit" },
   { c: "brief", cat: "daily", d: "one morning message: weather, reminders, quest, headlines, money, sleep", ex: "/brief at 6:30" },
   { c: "now", cat: "daily", d: "status board that updates itself (focus, quest, habits, money)", ex: "/now" },
   { c: "report", cat: "daily", d: "this week's report card: sleep, quest, habits, spending, focus", ex: "/report" },

@@ -331,6 +331,7 @@ import { renderVibeView, handleVibe, setVibe, clearKnobField, purgeKnobs, handle
 import { handleRp, handleScene, renderRpSavesView, rpSaveSlot, rpRestoreSlot, rpDelSlot, getScene } from './src/feat-story.js';
 import { renderAistatsHub, renderAistatDetail, aistWrapped } from './src/feat-aistats.js';
 import { handleFocus, handleSleep, handleHabit, handleBeli, handleCapsule, handleHabitCb, focusIntercept, handleHplanCb, handleCountdown, handleAma, handleAlarm, fReact } from './src/feat-life.js';
+import { handleAudit, undoAudit } from './src/feat-audit.js';
 import {
   buildSys,
   chatTurn,
@@ -491,6 +492,7 @@ async function handleUpdate(update, env) {
   if (cmd === "/totp") return handleTotp(env, msg, chatId);
   if (cmd === "/remember") return handleRemember(env, msg, chatId);
   if (cmd === "/export") { await delCmd(env, chatId, msg.message_id); return handleExport(env, msg, chatId); }
+  if (cmd === "/audit") return handleAudit(env, chatId, text.slice(cmd.length).trim());
   if (cmd === "/undo") { await delCmd(env, chatId, msg.message_id); return handleUndo(env, chatId); }
   if (cmd === "/mems") return listMemories(env, chatId);
   if (cmd === "/forget") return delMemory(env, msg, chatId);
@@ -625,6 +627,15 @@ async function handleCallback(env, cb) {
     }
     await pop(L.popRemDel(arg));
     await edit(renderReminders(obj, L));
+  } else if (act === "undo" && chatId) {
+    const r = await undoAudit(env, arg);
+    if (r.ok) {
+      const lbl = String((r.entry && (r.entry.label || r.entry.tool)) || "change");
+      await pop(L.auditUndone(lbl));
+      if (mid) await tg(env, "editMessageText", { chat_id: chatId, message_id: mid, text: L.auditUndone(lbl), parse_mode: "HTML" });
+    } else {
+      await pop(r.why === "expired" ? L.auditExpired : L.auditEmpty);
+    }
   } else if (act === "now" && chatId) {
     if (arg === "b") { await pop(L.nowBriefPop); return sendBrief(env, chatId, L); }
     const v = await nowView(env, chatId);
