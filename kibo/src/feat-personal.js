@@ -842,6 +842,7 @@ export function helpParts(L) {
 }
 
 import { profEconLine } from './feat-econ.js';
+import { COMMANDS, menuCommands } from './commands.js';
 
 export async function renderProfile(env) {
   const L = await uiLang(env);
@@ -927,18 +928,30 @@ function helpSections(L) {
   return secs;
 }
 
-export function renderHelpMenu(L) {
+export function renderHelpMenu(L, pageUrl, mode) {
+  const top = menuCommands().slice(0, 8).map(x => "/" + x.c).join(" ");
+  const rows = [];
+  if (pageUrl) {
+    const btn = { text: L.hpPage(COMMANDS.length) };
+    if (mode === "url") btn.url = pageUrl; else btn.web_app = { url: pageUrl };
+    rows.push([btn]);
+  }
+  rows.push([{ text: L.hpCats, callback_data: "helpcats" }, { text: L.bHelpFull, callback_data: "helpfull" }]);
+  rows.push([{ text: L.home, callback_data: "menu" }]);
+  return { text: L.helpHead + "\n\n" + L.hpTop + " " + top, markup: { inline_keyboard: rows } };
+}
+
+export function renderHelpCats(L, pageUrl) {
   const secs = helpSections(L);
   const rows = [];
   for (let i = 0; i < secs.length; i += 3) rows.push(secs.slice(i, i + 3).map((s, j) => ({ text: s.t, callback_data: "help:" + (i + j) })));
-  rows.push([{ text: L.bHelpFull, callback_data: "helpfull" }]);
-  rows.push([{ text: L.home, callback_data: "menu" }]);
-  return { text: L.helpHead, markup: { inline_keyboard: rows } };
+  rows.push([{ text: L.back, callback_data: "helpback" }, { text: L.home, callback_data: "menu" }]);
+  return { text: L.helpHead + "\n" + L.hpPick, markup: { inline_keyboard: rows } };
 }
 
-export function renderHelpCat(L, i) {
+export function renderHelpCat(L, i, pageUrl) {
   const s = helpSections(L)[i];
-  if (!s) return renderHelpMenu(L);
+  if (!s) return renderHelpCats(L, pageUrl);
   return { text: s.body.join("\n"), markup: { inline_keyboard: [[{ text: L.back, callback_data: "helpback" }], [{ text: L.home, callback_data: "menu" }]] } };
 }
 

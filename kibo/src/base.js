@@ -115,7 +115,7 @@ function probeKb(markup) {
   let m = markup;
   if (typeof m === "string") { try { m = JSON.parse(m); } catch (_) { return undefined; } }
   if (!m || !Array.isArray(m.inline_keyboard)) return undefined;
-  return m.inline_keyboard.map(row => (row || []).map(b => (b && b.callback_data ? { t: b.text, d: b.callback_data } : { t: b && b.text, u: b && b.url })));
+  return m.inline_keyboard.map(row => (row || []).map(b => (b && b.callback_data ? { t: b.text, d: b.callback_data } : (b && b.web_app ? { t: b.text, w: b.web_app.url } : { t: b && b.text, u: b && b.url }))));
 }
 
 export function tgErrLog(env, method, j) {

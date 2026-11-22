@@ -255,6 +255,7 @@ import {
   helpText,
   helpParts,
   renderHelpMenu,
+  renderHelpCats,
   renderHelpCat,
   renderProfile,
   renderStatsView,
@@ -279,6 +280,7 @@ import {
   handleLang,
   chatStream,
 } from './src/feat-personal.js';
+import { renderHelpPage, helpPageUrl } from './src/help-page.js';
 import {
   fmtSize,
   vaultMedia,
@@ -371,6 +373,9 @@ export default {
     if (request.method === "POST" && url.pathname === "/nhcb") return handleNhCb(request, env);
     if (request.method === "POST" && url.pathname === "/ytcb") return handleYtCb(request, env);
     if (request.method === "GET" && url.pathname === "/dbg") return handleDbgFlag(request, env);
+    if (request.method === "GET" && (url.pathname === "/help" || url.pathname === "/help/")) {
+      return new Response(renderHelpPage(env), { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "public, max-age=300" } });
+    }
     if (request.method !== "POST" || !url.pathname.startsWith("/hook/")) {
       return new Response("not found", { status: 404 });
     }
@@ -458,7 +463,16 @@ async function handleUpdate(update, env) {
   if (msg.document) return handleDocument(env, msg, chatId);
   if (!cmd.startsWith("/") && text) { const hl = hostLinkFind(text); if (hl) return handleHostFetch(env, chatId, hl); }
 
-  if (cmd === "/help") { const v = renderHelpMenu(await uiLang(env)); return tg(env, "sendMessage", { chat_id: chatId, text: v.text, parse_mode: "HTML", reply_markup: v.markup }); }
+  if (cmd === "/help") {
+    const hl = await uiLang(env), hUrl = helpPageUrl(env, SELF_BASE);
+    const v = renderHelpMenu(hl, hUrl);
+    const j = await tg(env, "sendMessage", { chat_id: chatId, text: v.text, parse_mode: "HTML", reply_markup: v.markup });
+    if (j && !j.ok) {
+      const f = renderHelpMenu(hl, hUrl, "url");
+      return tg(env, "sendMessage", { chat_id: chatId, text: f.text, parse_mode: "HTML", reply_markup: f.markup });
+    }
+    return j;
+  }
   if (cmd === "/start") return handleStart(env, msg, chatId);
   if (cmd === "/ping") return notify(env, chatId, "pong " + fmtWIB(Math.floor(Date.now() / 1000), await uiLang(env)));
   if (cmd === "/otp") return handleOtp(env, chatId);
@@ -952,10 +966,13 @@ async function handleCallback(env, cb) {
     await edit(await renderUiLangView(env));
   } else if (act === "help" && chatId) {
     await pop();
-    await edit(renderHelpCat(L, parseInt(arg, 10)));
+    await edit(renderHelpCat(L, parseInt(arg, 10), helpPageUrl(env, SELF_BASE)));
+  } else if (act === "helpcats" && chatId) {
+    await pop();
+    await edit(renderHelpCats(L, helpPageUrl(env, SELF_BASE)));
   } else if (act === "helpback" && chatId) {
     await pop();
-    await edit(renderHelpMenu(L));
+    await edit(renderHelpMenu(L, helpPageUrl(env, SELF_BASE)));
   } else if (act === "helpfull" && chatId) {
     await pop();
     for (const p of helpParts(L)) await reply(env, chatId, p);
