@@ -1,11 +1,18 @@
 
 import {
   SLEEP_LOG_KEY, SLEEP_GN_KEY, HABITS_KEY, EXP_KEY, COUNTDOWN_KEY, COUNTDOWN_MAX, COUNTDOWN_NAME_CAP,
+  HABIT_MAX, HABIT_PLAN_KEY, MEM_KEY, CMEM_PREFIX, FILE_INDEX_KEY, READLIST_KEY, WX_LOC_KEY, WX_CTX_KEY,
+  SLEEP_CAP_H,
 } from './consts.js';
 import { getJSON, putJSON } from './base.js';
-import { fmtWIB } from './ui.js';
+import { fmtWIB, UI } from './ui.js';
 import { questDay, XP_PER_LEVEL, journalAdd } from './feat-remind.js';
-import { habitCheck, expenseAdd, dayWIB, monWIB, rp } from './feat-life.js';
+import {
+  habitCheck, expenseAdd, dayWIB, monWIB, rp, wkOf, sleepMark, focusStart, focusEnd, focusState,
+} from './feat-life.js';
+import { getActiveCard } from './feat-chars.js';
+import { geocode, wxLine } from './feat-ctx.js';
+import { doctorChecks, doctorLine, doctorLang, BAD, UNKNOWN } from './feat-doctor.js';
 
 const nowS = () => Math.floor(Date.now() / 1000);
 const num = n => String(Math.round(Number(n) || 0)).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
@@ -136,6 +143,38 @@ export async function agentJournal(env, a) {
 
 export async function agentHabits(env, a) {
   const action = String((a && a.action) || "list").toLowerCase();
+  if (action === "add" || action === "new") {
+    const name = esc1(a && (a.name || a.text)).slice(0, 30);
+    if (!name) return "error: what should the habit be called? pass name";
+    const tgt = parseInt((a && (a.target || a.tgt)) || 0, 10) || 0;
+    if (tgt && (tgt < 1 || tgt > 7)) return "error: a weekly target must be 1-7 days";
+    const arr = (await getJSON(env, HABITS_KEY, [])).filter(h => h && h.name);
+    if (arr.length >= HABIT_MAX) return "error: the habit list is full (" + HABIT_MAX + ") — delete one first";
+    if (arr.some(h => h.name.toLowerCase() === name.toLowerCase())) return "error: a habit with that name already exists";
+    const h = Object.assign({ id: (arr.reduce((m, x) => Math.max(m, x.id || 0), 0) + 1), name, streak: 0, last_done: "" });
+    if (tgt) Object.assign(h, { tgt, wk: wkOf(nowS()), wkc: 0 });
+    arr.push(h);
+    await putJSON(env, HABITS_KEY, arr);
+    return "habit \"" + name + "\" (#" + h.id + ") added" + (tgt ? " with a weekly target of " + tgt + " days" : " — daily") + " · " + arr.length + " habits total";
+  }
+  if (action === "del" || action === "delete" || action === "remove") {
+    const who = esc1(a && (a.name || a.id || a.text)).toLowerCase();
+    if (!who) return "error: which habit? pass name (or its id)";
+    const arr = (await getJSON(env, HABITS_KEY, [])).filter(h => h && h.name);
+    const hits = arr.filter(h => String(h.id) === who || h.name.toLowerCase() === who)
+      .concat(arr.filter(h => h.name.toLowerCase().includes(who) && !(String(h.id) === who || h.name.toLowerCase() === who)));
+    if (!hits.length) return "error: no habit matches \"" + who + "\"";
+    if (hits.length > 1) return "several habits match \"" + who + "\": " + hits.map(h => "#" + h.id + " " + h.name).join(", ") + " — call again with the exact name or id";
+    const gone = hits[0];
+    await putJSON(env, HABITS_KEY, arr.filter(h => h.id !== gone.id));
+    const plan = await getJSON(env, HABIT_PLAN_KEY, null);
+    if (plan && Array.isArray(plan.habits)) {
+      let ch = false;
+      for (const hp of plan.habits) if (hp.hid === gone.id) { hp.hid = -1; ch = true; }
+      if (ch) await putJSON(env, HABIT_PLAN_KEY, plan);
+    }
+    return "habit \"" + esc1(gone.name) + "\" (#" + gone.id + ") deleted — " + (arr.length - 1) + " left";
+  }
   if (action === "check" || action === "done" || action === "tick") {
     const who = (a && (a.name || a.id)) || "";
     if (!String(who).trim()) return "error: which habit? pass name (or its id)";
@@ -188,4 +227,91 @@ export async function agentCountdown(env, a) {
   await putJSON(env, COUNTDOWN_KEY, arr);
   const d = daysLeft(day);
   return "countdown \"" + esc1(name.slice(0, COUNTDOWN_NAME_CAP)) + "\" (#" + id + ") set for " + day + (d === 0 ? " — that is today" : " — in " + d + " days");
+}
+
+export async function agentSleep(env, a) {
+  const action = String((a && (a.action || a.what)) || "stats").toLowerCase();
+  const bed = /^(bed|gn|sleep|goodnight|tidur)$/.test(action);
+  const wake = /^(wake|gm|morning|bangun)$/.test(action);
+  if (bed || wake) {
+    const r = await sleepMark(env, bed ? "gn" : "gm");
+    if (!r.ok) return "error: no bedtime was logged, so there is nothing to wake up from — log the bed time first (action=bed)";
+    if (r.action === "bed") return "bedtime logged at " + fmtWIB(r.at) + " — sleep well";
+    return "wake-up logged: slept " + r.h + "h (bed " + fmtWIB(r.bed) + ")";
+  }
+  const [log, gn] = await Promise.all([getJSON(env, SLEEP_LOG_KEY, []), getJSON(env, SLEEP_GN_KEY, null)]);
+  const sl = (log || []).filter(e => e && typeof e.h === "number").slice(0, 7);
+  if (!sl.length && !gn) return "no sleep logged yet — the user can say 'goodnight' / 'morning' and I log it";
+  const avg = sl.length ? Math.round(sl.reduce((s, e) => s + e.h, 0) / sl.length * 10) / 10 : 0;
+  return (gn ? "session open since " + fmtWIB(Number(gn)) + " (no wake-up yet)\n" : "") +
+    (sl.length ? sl.map(e => fmtWIB(e.gm) + " — " + e.h + "h").join("\n") + "\n" + sl.length + "-night average: " + avg + "h" : "no finished nights yet");
+}
+
+export async function agentFocus(env, a) {
+  const action = String((a && a.action) || "status").toLowerCase();
+  if (/^(start|begin|go)$/.test(action)) {
+    const min = a && (a.minutes || a.min || a.n);
+    const r = await focusStart(env, min);
+    if (!r.ok && r.why === "range") return "error: a focus session must be " + r.min + "-" + r.max + " minutes";
+    if (!r.ok) return "error: a " + r.min + "-minute session is still running (" + r.left + " min left) — finish or stop it first";
+    return "focus session started: " + r.min + " min, ends " + fmtWIB(r.endsAt) + " — the bot is on do-not-disturb until then";
+  }
+  if (/^(done|finish|claim|stop|abort|end)$/.test(action)) {
+    const how = /^(stop|abort|end)$/.test(action) ? "stop" : "done";
+    const r = await focusEnd(env, how);
+    if (!r.ok) return "error: no focus session is open";
+    if (r.outcome === "claim") return "focus session finished and claimed: +" + r.pts + " points (wallet " + r.wallet + ")";
+    if (r.outcome === "abort") return "focus session ended early (" + r.min + " min) — no points";
+    return "focus session was over and its claim window had already passed — no points";
+  }
+  const { busy, st, left } = await focusState(env);
+  if (!busy) return "no focus session running";
+  return "focus running: " + Math.round(st.dur / 60) + " min total, " + Math.ceil(left / 60) + " min left (ends " + fmtWIB(st.start + st.dur) + ")";
+}
+
+export async function agentWeather(env, a) {
+  const place = esc1(a && (a.place || a.city || a.q || a.location));
+  if (place) {
+    let g = null;
+    try { g = await geocode(env, place); } catch (_) {}
+    if (!g) return "error: could not find a place called \"" + place + "\"";
+    try { await putJSON(env, WX_LOC_KEY, { lat: g.lat, lon: g.lon, name: g.name }); } catch (_) {}
+    try { await putJSON(env, WX_CTX_KEY, { v: null, exp: 0 }); } catch (_) {}
+  }
+  const line = await wxLine(env);
+  return line || "error: no weather location set yet — pass a place once and the bot remembers it";
+}
+
+export async function agentSearch(env, chatId, a) {
+  const q = esc1(a && (a.query || a.q)).toLowerCase();
+  if (!q) return "error: what should I search for?";
+  const card = await getActiveCard(env).catch(() => null);
+  const [mems, files, journal, remObj, cd, rl] = await Promise.all([
+    getJSON(env, card ? CMEM_PREFIX + card.id : MEM_KEY, []),
+    getJSON(env, FILE_INDEX_KEY, []),
+    getJSON(env, "journal", []),
+    getJSON(env, "reminders", {}),
+    getJSON(env, COUNTDOWN_KEY, []),
+    getJSON(env, READLIST_KEY + (chatId || 0), { list: [] }),
+  ]);
+  const hit = s => String(s == null ? "" : s).toLowerCase().includes(q);
+  const out = [];
+  for (const m of (mems || [])) if (m && hit(m.text)) out.push("memory #" + m.id + ": " + esc1(m.text).slice(0, 180));
+  for (const f of (files || [])) if (f && (hit(f.name) || hit(f.text))) out.push("saved \"" + esc1(f.name) + "\" (" + (f.kind || "file") + "): " + esc1(f.text || "").slice(0, 160));
+  for (const e of (journal || [])) if (e && hit(e.text)) out.push("journal " + fmtWIB(Math.floor(e.ts / 1000)) + ": " + esc1(e.text).slice(0, 160));
+  for (const k of Object.keys(remObj || {})) { const r = remObj[k]; if (r && !r.done && hit(r.text)) out.push("reminder #" + k + " (" + fmtWIB(r.at) + "): " + esc1(r.text)); }
+  for (const c of (cd || [])) if (c && hit(c.name)) out.push("countdown #" + c.id + ": " + esc1(c.name) + " — " + c.day);
+  for (const i of ((rl && rl.list) || [])) if (i && hit(i.title)) out.push("reading list: " + esc1(i.title) + (i.done ? " (done)" : ""));
+  if (!out.length) return "nothing found for \"" + q + "\" in memories, saved notes, journal, reminders, countdowns or the reading list";
+  const shown = out.slice(0, 12);
+  return "found " + out.length + " hit(s) for \"" + q + "\":\n" + shown.join("\n") + (out.length > shown.length ? "\n… and " + (out.length - shown.length) + " more" : "");
+}
+
+export async function agentDoctor(env) {
+  const L = await doctorLang(env);
+  const checks = await doctorChecks(env);
+  const bad = checks.filter(c => c.state === BAD);
+  const unk = checks.filter(c => c.state === UNKNOWN);
+  return "kibo self check:\n" + checks.map(c => doctorLine(L, c)).join("\n") +
+    "\nverdict: " + (bad.length ? bad.length + " problem(s) — " + bad.map(c => c.k).join(", ") : "all good") + (unk.length ? " (" + unk.length + " unknown)" : "");
 }

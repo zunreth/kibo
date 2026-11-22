@@ -138,6 +138,11 @@ import {
   agentHabits,
   agentExpense,
   agentCountdown,
+  agentSleep,
+  agentFocus,
+  agentWeather,
+  agentSearch,
+  agentDoctor,
 } from './feat-agent.js';
 
 export const TOOLS_AGENT = [
@@ -153,9 +158,14 @@ export const TOOLS_AGENT = [
   { type: "function", function: { name: "reminders", description: "The user's reminders. action='list' returns every active reminder with its id and time. action='del' cancels one — pass id, or match=a chunk of its text. Always list first when the user is vague about which one.", parameters: { type: "object", properties: { action: { type: "string", enum: ["list", "del"], description: "what to do" }, id: { type: "integer", description: "reminder id (for del)" }, match: { type: "string", description: "text to match when the id is unknown (for del)" } }, required: ["action"] } } },
   { type: "function", function: { name: "my_status", description: "One snapshot of the user's life data: level/XP, points, today's daily quest + streak/shields, open side quests, active reminders, last night's sleep, habits done today, money spent this month, journal activity, upcoming countdowns. Call it before answering anything like 'how am I doing', 'what's pending', 'how much did I spend'.", parameters: { type: "object", properties: {} } } },
   { type: "function", function: { name: "journal", description: "The user's private journal. action='read' returns the latest entries (count=how many, default 3). action='write' appends an entry the user just dictated — keep their words and their #feeling tags.", parameters: { type: "object", properties: { action: { type: "string", enum: ["read", "write"], description: "what to do" }, text: { type: "string", description: "the entry (for write)" }, count: { type: "integer", description: "how many entries to read (default 3, max 10)" } }, required: ["action"] } } },
-  { type: "function", function: { name: "habits", description: "The user's habit tracker. action='list' shows every habit with today's tick and streak. action='check' ticks one off for today and awards points — pass name (part of the habit name) or id.", parameters: { type: "object", properties: { action: { type: "string", enum: ["list", "check"], description: "what to do" }, name: { type: "string", description: "habit name or id (for check)" } }, required: ["action"] } } },
+  { type: "function", function: { name: "habits", description: "The user's habit tracker. action='list'; action='check' ticks one off for today and awards points (name = part of the habit name, or id); action='add' creates one (name, optional target = days per week 1-7); action='del' removes one.", parameters: { type: "object", properties: { action: { type: "string", enum: ["list", "check", "add", "del"], description: "what to do" }, name: { type: "string", description: "habit name or id" }, target: { type: "integer", description: "days per week 1-7 (for add, optional)" } }, required: ["action"] } } },
   { type: "function", function: { name: "log_expense", description: "Record money the user spent. amount in rupiah, plain number (25000) or short form ('25k'). note = what it was for. Use it whenever the user mentions paying/buying something.", parameters: { type: "object", properties: { amount: { type: "string", description: "how much, e.g. 25000 or 25k" }, note: { type: "string", description: "what for, e.g. 'kopi'" } }, required: ["amount"] } } },
-  { type: "function", function: { name: "countdown", description: "The days-until list (birthdays, deadlines, releases). action='list'; action='add' with name + date as YYYY-MM-DD; action='del' with id.", parameters: { type: "object", properties: { action: { type: "string", enum: ["list", "add", "del"], description: "what to do" }, name: { type: "string", description: "what it is (for add)" }, date: { type: "string", description: "YYYY-MM-DD (for add)" }, id: { type: "integer", description: "countdown id (for del)" } }, required: ["action"] } } }
+  { type: "function", function: { name: "countdown", description: "The days-until list (birthdays, deadlines, releases). action='list'; action='add' with name + date as YYYY-MM-DD; action='del' with id.", parameters: { type: "object", properties: { action: { type: "string", enum: ["list", "add", "del"], description: "what to do" }, name: { type: "string", description: "what it is (for add)" }, date: { type: "string", description: "YYYY-MM-DD (for add)" }, id: { type: "integer", description: "countdown id (for del)" } }, required: ["action"] } } },
+  { type: "function", function: { name: "sleep", description: "The sleep log. action='bed' when the user goes to bed, 'wake' when they get up (it computes the hours), 'stats' for the last nights. Never guess the hours yourself — always log and read back.", parameters: { type: "object", properties: { action: { type: "string", enum: ["bed", "wake", "stats"], description: "what happened" } }, required: ["action"] } } },
+  { type: "function", function: { name: "focus", description: "A focus/deep-work session. action='start' with minutes (the bot goes do-not-disturb); action='done' finishes it and pays points if the time is up; action='stop' gives up early; action='status' shows what is running.", parameters: { type: "object", properties: { action: { type: "string", enum: ["start", "done", "stop", "status"], description: "what to do" }, minutes: { type: "integer", description: "session length (for start)" } }, required: ["action"] } } },
+  { type: "function", function: { name: "weather", description: "Current weather + today's forecast for the user's saved location. Pass place once if they name a city (it is remembered).", parameters: { type: "object", properties: { place: { type: "string", description: "city name, only when they name one" } } } } },
+  { type: "function", function: { name: "search_all", description: "Search everything the bot knows about the user: long-term memories, saved notes/files, journal entries, reminders, countdowns and the reading list. Use it for 'what did I say about X', 'do I still have that note about Y', 'when was that thing I saved'.", parameters: { type: "object", properties: { query: { type: "string", description: "keywords to look for" } }, required: ["query"] } } },
+  { type: "function", function: { name: "self_check", description: "Run the bot's own health check (KV, database, cron heartbeats, AI endpoint, media worker, backup age) and report whether anything is broken. Free, no model tokens.", parameters: { type: "object", properties: {} } } }
 ];
 
 export function ddgHost(u) {
@@ -341,6 +351,11 @@ export async function execTool(env, name, argsJson, chatId) {
   if (name === "habits") return agentHabits(env, a);
   if (name === "log_expense") return agentExpense(env, a);
   if (name === "countdown") return agentCountdown(env, a);
+  if (name === "sleep") return agentSleep(env, a);
+  if (name === "focus") return agentFocus(env, a);
+  if (name === "weather") return agentWeather(env, a);
+  if (name === "search_all") return agentSearch(env, chatId || parseInt((await env.KV.get("owner_chat")) || "0", 10), a);
+  if (name === "self_check") return agentDoctor(env);
   if (name === "open_url" || (!q && url)) {
     if (!url) return "error: url is empty";
     const t = await fetchPageText(url);
@@ -373,7 +388,13 @@ export function toolLabel(name, argsJson, L) {
   if (name === "reminders") return String(a.action || "list").toLowerCase() === "del" ? L.tlRemDel + (a.id || a.match || "?") : L.tlRemList;
   if (name === "my_status") return L.tlStatus;
   if (name === "journal") return String(a.action || "read").toLowerCase() === "write" ? L.tlJournalW : L.tlJournalR;
-  if (name === "habits") return String(a.action || "list").toLowerCase() === "check" ? L.tlHabitChk + (a.name || a.id || "?") : L.tlHabitList;
+  if (name === "habits") {
+    const act = String(a.action || "list").toLowerCase();
+    if (act === "check") return L.tlHabitChk + (a.name || a.id || "?");
+    if (act === "add") return L.tlHabitAdd + (a.name || "?");
+    if (act === "del") return L.tlHabitDel + (a.name || a.id || "?");
+    return L.tlHabitList;
+  }
   if (name === "log_expense") return L.tlExpense + (a.amount || "?") + (a.note ? " \u2014 " + a.note : "");
   if (name === "countdown") {
     const act = String(a.action || "list").toLowerCase();
@@ -381,6 +402,20 @@ export function toolLabel(name, argsJson, L) {
     if (act === "add") return L.tlCdAdd + (a.name || "?") + (a.date ? " \u2014 " + a.date : "");
     return L.tlCdList;
   }
+  if (name === "sleep") {
+    const act = String(a.action || "stats").toLowerCase();
+    return act === "bed" ? L.tlSleepBed : act === "wake" ? L.tlSleepWake : L.tlSleepStats;
+  }
+  if (name === "focus") {
+    const act = String(a.action || "status").toLowerCase();
+    if (act === "start") return L.tlFocusStart + (a.minutes || a.min || "?") + " min";
+    if (/^(done|finish|claim)$/.test(act)) return L.tlFocusDone;
+    if (/^(stop|abort|end)$/.test(act)) return L.tlFocusStop;
+    return L.tlFocusStatus;
+  }
+  if (name === "weather") return L.tlWeather + (a.place || a.city || a.q || "");
+  if (name === "search_all") return L.tlSearchAll + '"' + (a.query || a.q || "?") + '"';
+  if (name === "self_check") return L.tlSelfCheck;
   let q = a.query || a.q || a.keywords || "";
   if (Array.isArray(q)) q = q.join(" ");
   return L.tlSearch + ' "' + (q || "?") + '"';

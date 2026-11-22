@@ -47,36 +47,62 @@ function parseDur(raw) {
   const n = parseInt(m[1], 10);
   return /^(j|jam|h)/.test(m[2] || "") ? n * 60 : n;
 }
+export async function focusState(env, atSec) {
+  const sec = atSec || nowS();
+  const st = await getJSON(env, FOCUS_KEY, null);
+  const busy = !!(st && !st.settled && sec < st.start + st.dur);
+  return { sec, st, busy, left: busy ? st.start + st.dur - sec : 0 };
+}
+
+export async function focusStart(env, minutes) {
+  const n = Math.round(Number(minutes));
+  if (!isFinite(n) || n < FOCUS_MIN || n > FOCUS_MAX) return { ok: false, why: "range", min: FOCUS_MIN, max: FOCUS_MAX };
+  const { sec, busy, st } = await focusState(env);
+  if (busy) return { ok: false, why: "busy", min: Math.round(st.dur / 60), left: Math.round((st.start + st.dur - sec) / 60) };
+  await putJSON(env, FOCUS_KEY, { start: sec, dur: n * 60, settled: false });
+  return { ok: true, min: n, endsAt: sec + n * 60 };
+}
+
+export async function focusEnd(env, how) {
+  const { sec, st } = await focusState(env);
+  if (!st || st.settled) return { ok: false, why: "gone" };
+  const end = st.start + st.dur;
+  await putJSON(env, FOCUS_KEY, Object.assign({}, st, { settled: true }));
+  const min = Math.round(st.dur / 60);
+  if (how === "done" && sec >= end && sec <= end + FOCUS_GRACE) {
+    await addPts(env, FOCUS_PTS);
+    const wallet = ((await getJSON(env, "quest", {})).points) || 0;
+    return { ok: true, outcome: "claim", min, pts: FOCUS_PTS, wallet };
+  }
+  if (how === "stop" || sec < end) return { ok: true, outcome: "abort", min };
+  return { ok: true, outcome: "late", min };
+}
+
 export async function handleFocus(env, msg, chatId) {
   const L = await uiLang(env);
   const raw = (msg.text || "").replace(/^\/\S+\s*/, "").trim().toLowerCase();
-  const sec = nowS();
-  const st = await getJSON(env, FOCUS_KEY, null);
-  const busy = !!(st && !st.settled && sec < st.start + st.dur);
   if (raw === "done" || raw === "stop") {
-    if (!st || st.settled) return reply(env, chatId, L.fGone);
-    const end = st.start + st.dur;
-    await putJSON(env, FOCUS_KEY, Object.assign({}, st, { settled: true }));
-    if (raw === "done" && sec >= end && sec <= end + FOCUS_GRACE) {
-      await addPts(env, FOCUS_PTS);
-      const wallet = ((await getJSON(env, "quest", {})).points) || 0;
-      await reply(env, chatId, L.fClaimOk(FOCUS_PTS, wallet));
-      return reactTail(env, chatId, await lifeMsg(env, "the user just completed a " + Math.round(st.dur / 60) + "-minute focus session (+" + FOCUS_PTS + " points)", "the user finished a focus session: praise them briefly and warmly, one line."));
+    const r = await focusEnd(env, raw);
+    if (!r.ok) return reply(env, chatId, L.fGone);
+    if (r.outcome === "claim") {
+      await reply(env, chatId, L.fClaimOk(r.pts, r.wallet));
+      return reactTail(env, chatId, await lifeMsg(env, "the user just completed a " + r.min + "-minute focus session (+" + r.pts + " points)", "the user finished a focus session: praise them briefly and warmly, one line."));
     }
-    if (raw === "stop" || sec < end) {
+    if (r.outcome === "abort") {
       await reply(env, chatId, L.fAbort);
-      return reactTail(env, chatId, await lifeMsg(env, "the user aborted their " + Math.round(st.dur / 60) + "-minute focus session early", "the user gave up on the focus session: mild loving disappointment (no hard scolding), one line."));
+      return reactTail(env, chatId, await lifeMsg(env, "the user aborted their " + r.min + "-minute focus session early", "the user gave up on the focus session: mild loving disappointment (no hard scolding), one line."));
     }
     return reply(env, chatId, L.fKabur);
   }
   if (!raw) {
-    if (busy) return reply(env, chatId, L.fHead + "\n" + L.fRun(Math.round(st.dur / 60), st.start + st.dur - sec) + "\n" + L.fHow);
+    const { busy, st, left } = await focusState(env);
+    if (busy) return reply(env, chatId, L.fHead + "\n" + L.fRun(Math.round(st.dur / 60), left) + "\n" + L.fHow);
     return reply(env, chatId, L.fHead + "\n" + L.fIdle + "\n" + L.fHow);
   }
   const n = parseDur(raw);
   if (n === null || n < FOCUS_MIN || n > FOCUS_MAX) return reply(env, chatId, L.fRange(FOCUS_MIN, FOCUS_MAX));
-  if (busy) return reply(env, chatId, L.fRun(Math.round(st.dur / 60), st.start + st.dur - sec) + "\n" + L.fHow);
-  await putJSON(env, FOCUS_KEY, { start: sec, dur: n * 60, settled: false });
+  const r = await focusStart(env, n);
+  if (!r.ok) return reply(env, chatId, L.fRun(r.min, r.left * 60) + "\n" + L.fHow);
   await reply(env, chatId, L.fSet(n));
 }
 
@@ -105,25 +131,35 @@ export async function focusIntercept(env, chatId, cmd, text, mid) {
   return true;
 }
 
+export async function sleepMark(env, what) {
+  const sec = nowS();
+  if (what === "gn") {
+    await putJSON(env, SLEEP_GN_KEY, sec);
+    return { ok: true, action: "bed", at: sec };
+  }
+  const gn = await getJSON(env, SLEEP_GN_KEY, null);
+  if (!gn) return { ok: false, why: "no-bed" };
+  const h = Math.min(SLEEP_CAP_H, Math.round(((sec - gn) / 36) / 10) / 10);
+  const log = (await getJSON(env, SLEEP_LOG_KEY, [])).filter(x => x && typeof x.gm === "number");
+  log.unshift({ gn, gm: sec, h });
+  while (log.length > SLEEP_LOG_MAX) log.pop();
+  await putJSON(env, SLEEP_LOG_KEY, log);
+  await env.KV.delete(SLEEP_GN_KEY);
+  return { ok: true, action: "wake", h, bed: gn, woke: sec };
+}
+
 export async function handleSleep(env, msg, chatId) {
   const L = await uiLang(env);
   const raw = (msg.text || "").replace(/^\/\S+\s*/, "").trim().toLowerCase();
-  const sec = nowS();
   if (raw === "gn") {
-    await putJSON(env, SLEEP_GN_KEY, sec);
-    return notify(env, chatId, L.sGnSet(fmtWIB(sec, L)));
+    const r = await sleepMark(env, "gn");
+    return notify(env, chatId, L.sGnSet(fmtWIB(r.at, L)));
   }
   if (raw === "gm") {
-    const gn = await getJSON(env, SLEEP_GN_KEY, null);
-    if (!gn) return reply(env, chatId, L.sGmNo);
-    const h = Math.min(SLEEP_CAP_H, Math.round(((sec - gn) / 36) / 10) / 10);
-    const log = (await getJSON(env, SLEEP_LOG_KEY, [])).filter(x => x && typeof x.gm === "number");
-    log.unshift({ gn, gm: sec, h });
-    while (log.length > SLEEP_LOG_MAX) log.pop();
-    await putJSON(env, SLEEP_LOG_KEY, log);
-    await env.KV.delete(SLEEP_GN_KEY);
-    await reply(env, chatId, L.sGmOk(h));
-    return reactTail(env, chatId, await lifeMsg(env, "the user just woke up; last night " + h + " hours (now in the sleep log)", h < 6 ? "the user slept under 6 hours: gently worry / tease about their sleep, one line." : "the user slept enough: greet them warmly, one line."));
+    const r = await sleepMark(env, "gm");
+    if (!r.ok) return reply(env, chatId, L.sGmNo);
+    await reply(env, chatId, L.sGmOk(r.h));
+    return reactTail(env, chatId, await lifeMsg(env, "the user just woke up; last night " + r.h + " hours (now in the sleep log)", r.h < 6 ? "the user slept under 6 hours: gently worry / tease about their sleep, one line." : "the user slept enough: greet them warmly, one line."));
   }
   const log = (await getJSON(env, SLEEP_LOG_KEY, [])).filter(x => x && typeof x.gm === "number").slice(0, 7);
   const gn = await getJSON(env, SLEEP_GN_KEY, null);
@@ -306,7 +342,7 @@ export async function expenseAdd(env, amtTok, note) {
   return { ok: true, amt, note: String(note || "").trim().slice(0, EXP_NOTE_CAP), total, n: rows.length };
 }
 
-export { dayWIB, monWIB, rp };
+export { dayWIB, monWIB, rp, wkOf };
 
 export async function handleCapsule(env, msg, chatId) {
   const L = await uiLang(env);
