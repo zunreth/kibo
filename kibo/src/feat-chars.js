@@ -42,6 +42,8 @@ import {
   PRESET_IMPORT_KEY,
   PRESET_COMPILED_CAP,
   RP_FORMAT,
+  OOC_KEY,
+  SCENE_KEY,
   VAULT_CHAT_KEY,
   FILE_INDEX_KEY,
   VAULT_SNAPS_KEY,
@@ -365,6 +367,8 @@ export async function handleChar(env, msg, chatId) {
   }
   if (sub === "off") {
     await env.KV.delete(CHAR_ACTIVE_KEY);
+    await env.KV.delete(SCENE_KEY);
+    await env.KV.delete(OOC_KEY);
     await resetHist();
     await notify(env, chatId, L.charOff);
     return;

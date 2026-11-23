@@ -310,11 +310,13 @@ async function takeLifeNotes(env) {
 export async function buildSys(env, lean, tgt, sc) {
   let card = await getActiveCard(env);
   let other = null;
-  if (sc && sc.b) {
+  if (sc && sc.b && card) {
     const cards = await getJSON(env, CHAR_KEY, []);
     other = cards.find(c => String(c.id) === String(sc.b)) || null;
+    if (other && String(other.id) === String(card.id)) other = null;
     if (other && tgt === "b") { const sw = other; other = card; card = sw; }
   }
+  const rp = !!card;
 
   const hk = await histKeyOf(env, card);
   const [mems, persona, hsum, rel, knobs, pl, npL, wxL, ln, rlen, langRaw, ooc] = await Promise.all([
@@ -342,21 +344,22 @@ export async function buildSys(env, lean, tgt, sc) {
   if (card && rel && typeof rel.aff === "number") sys += "\nRELATIONSHIP STATE with the user (evolves slowly over time): affinity " + rel.aff + "/100 (" + relStage(rel.aff) + ")" + (rel.mood ? ", current mood: " + rel.mood : "") + (rel.note ? ". Recent dynamic: " + rel.note : "") + ". Stay consistent with it.";
 
   for (const kl of knobs) sys += "\n" + kl;
-  if (pl) sys += "\n" + pl;
+  if (pl && rp) sys += "\n" + pl;
   if (npL) sys += "\n" + npL;
   if (wxL) sys += "\n" + wxL;
 
   if (ln.length) sys += "\n\nLIFE PROGRESS (system-observed updates since the last conversation - work them in naturally if relevant, never dump stats): " + ln.join(" ");
   if (rlen && LEN_HINT[rlen]) sys += "\nReply length for the user: " + LEN_HINT[rlen];
 
-  if (sc && other) {
+  if (sc && other && card) {
     const responder = card.name || "the character";
     const partner = other.name || "the other character";
     let sceneBlock = "\n\nGROUP SCENE (multi-character roleplay): besides " + responder + ", " + partner + " is present in this scene. " + partner + " character notes:\n" + String(other.prompt || "").slice(0, 900) + "\nSCENE RULES: the reply may contain lines from both characters - EVERY spoken line must start with the speaker's name and a colon (example: " + partner + ': "hello"), narration stays neutral. This turn: ' + (tgt === "b" ? "the user is directly replying to " + responder + "'s last message, so " + responder + " leads the reply." : "no reply-target, so " + responder + " leads the reply by default.");
     sys += sceneBlock.split("{{user}}").join(persona ? persona.name : "User").split("{{char}}").join(responder);
   }
   sys += langLine(langRaw);
-  if (ooc) sys += OOC_DIRECTIVE; else sys += RP_FORMAT;
+  if (rp && ooc) sys += OOC_DIRECTIVE;
+  else if (rp) sys += RP_FORMAT;
   if (lean) {
     sys += "\n\nCONTINUATION MODE: this continues a reply cut by the runtime limit \u2014 do NOT re-analyze/re-verify/re-check rules, do NOT write any thinking process in the output. Write the prose directly, continuing from the context.";
     return sys;
@@ -371,8 +374,8 @@ export async function buildSys(env, lean, tgt, sc) {
   if (qctx) sys += "\n\n" + qctx;
 
   sys += "\n\nIMPORTANT: never show your thinking/verification process (word counting, requirement checklists, POV checks, etc) in the output \u2014 that process is silently discarded. Reply ONLY with the final content ready for the user to read.";
-  if (ooc) sys += OOC_REMINDER;
-  else { const kr = await knobReminder(env, card); if (kr) sys += kr; }
+  if (rp && ooc) sys += OOC_REMINDER;
+  else if (rp) { const kr = await knobReminder(env, card); if (kr) sys += kr; }
   return sys;
 }
 export async function chatTurn(env, chatId, text, histPre, userMid, replyMid) {

@@ -29,8 +29,13 @@ async function aistData(env, card) {
     env.KV.get(AIST_FIRST_PREFIX + id),
     env.KV.get(AIST_MSG_PREFIX + id),
   ]);
-  return { rel, mems, sum, chaps, saves, ckpt, knobs, plot, ooc, sc, rec,
-    fs: fsRaw ? parseInt(fsRaw, 10) || 0 : 0, msgN: msgRaw ? parseInt(msgRaw, 10) || 0 : 0 };
+  let fs = fsRaw ? parseInt(fsRaw, 10) || 0 : 0;
+  if (!fs) {
+    const cand = [rel && rel.ts, sum && sum.ts].filter(n => typeof n === "number" && n > 0);
+    if (cand.length) fs = Math.min(...cand);
+  }
+  const msgN = Math.max(msgRaw ? parseInt(msgRaw, 10) || 0 : 0, (sum && sum.n) || 0);
+  return { rel, mems, sum, chaps, saves, ckpt, knobs, plot, ooc, sc, rec, fs, msgN };
 }
 
 export async function renderAistatsHub(env) {

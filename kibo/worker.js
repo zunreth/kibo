@@ -707,6 +707,8 @@ async function handleCallback(env, cb) {
     if (card) {
       await env.KV.put(CHAR_ACTIVE_KEY, String(id));
       await env.KV.delete(CHAT_HIST_KEY);
+      await env.KV.delete(SCENE_KEY);
+      try { const fk = AIST_FIRST_PREFIX + id; if (!(await env.KV.get(fk))) await env.KV.put(fk, String(Date.now())); } catch (_) {}
       await pop(L.popCact(card.name));
     } else {
       await pop(L.popCardGone);
@@ -751,6 +753,7 @@ async function handleCallback(env, cb) {
     await env.KV.delete(CHAR_ACTIVE_KEY);
     await env.KV.delete(CHAT_HIST_KEY);
     await env.KV.delete(SCENE_KEY);
+    await env.KV.delete(OOC_KEY);
     await pop(L.popCoff);
     if (mid) {
       const cards = await getJSON(env, CHAR_KEY, []);
