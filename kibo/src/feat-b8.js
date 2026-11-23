@@ -1,6 +1,6 @@
 import { getJSON, putJSON, tg, reply, esc } from './base.js';
 import { uiLang, UI_SEP } from './ui.js';
-import { READLIST_KEY, READLIST_MAX, OTD_KEY, SHORT_KEY, SHORT_COUNT_KEY, SHORT_URL_MAX, WRAP_KEY, WRAP_GAP_MS, WRAP_TOP, LFM_TRACKS_MAX, WRAP_SHOW, LFM_USER_KEY, LFM_USER_DEFAULT, SYS_WRAP, LANG_KEY, PASTE_KEY, PASTE_MAX, PASTE_TTL_MS, WIB, UA } from './consts.js';
+import { READLIST_KEY, READLIST_MAX, OTD_KEY, SHORT_KEY, SHORT_URL_MAX, WRAP_KEY, WRAP_GAP_MS, WRAP_TOP, LFM_TRACKS_MAX, WRAP_SHOW, LFM_USER_KEY, LFM_USER_DEFAULT, SYS_WRAP, LANG_KEY, PASTE_KEY, PASTE_MAX, PASTE_TTL_MS, WIB, UA } from './consts.js';
 
 import { chatStream } from './feat-personal.js';
 import { stripThink, langLine } from './ai.js';
@@ -119,21 +119,35 @@ export async function otdView(env, chatId, mid) {
   return tg(env, "sendMessage", { chat_id: chatId, text: view.text, parse_mode: "HTML", reply_markup: view.markup });
 }
 
-const B62_ALPH = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
-function b62(n) { let s = ""; do { s = B62_ALPH[n % 62] + s; n = Math.floor(n / 62); } while (n > 0); return s; }
+const CODE_ALPH = "abcdefghijkmnopqrstuvwxyz23456789";
+export function rndCode(len) {
+  const n = Math.max(4, Math.min(24, len || 7));
+  const out = new Array(n);
+  const g = globalThis.crypto;
+  if (g && g.getRandomValues) {
+    const buf = new Uint8Array(n);
+    g.getRandomValues(buf);
+    for (let i = 0; i < n; i++) out[i] = CODE_ALPH[buf[i] % CODE_ALPH.length];
+  } else {
+    for (let i = 0; i < n; i++) out[i] = CODE_ALPH[Math.floor(Math.random() * CODE_ALPH.length)];
+  }
+  return out.join("");
+}
 function shValid(u) { return /^https?:\/\//i.test(u) && u.length <= SHORT_URL_MAX; }
+export function shortHost(env) {
+  return String((env && (env.SHORT_HOST || env.SELF_BASE)) || "")
+    .replace(/^https?:\/\//i, "").replace(/\/+$/, "");
+}
 
 export async function shorten(env, raw) {
   const u = String(raw || "").trim();
-  const host = env.SHORT_HOST || env.SELF_BASE || "";
+  const host = shortHost(env);
   if (!u) return { ok: false, why: "empty" };
   if (!shValid(u)) return { ok: false, why: "bad", max: SHORT_URL_MAX };
   if (!host) return { ok: false, why: "nohost" };
-  const cnt = await getJSON(env, SHORT_COUNT_KEY, { n: 0 });
-  const n = (cnt.n || 0) + 1;
-  const code = b62(n);
+  let code = rndCode(7);
+  for (let i = 0; i < 3 && (await getJSON(env, SHORT_KEY + code, null)); i++) code = rndCode(7);
   await putJSON(env, SHORT_KEY + code, { url: u, ts: Date.now() });
-  await putJSON(env, SHORT_COUNT_KEY, { n });
   return { ok: true, code, short: "https://" + host + "/s/" + code, url: u };
 }
 export async function shortAdd(env, chatId, raw) {
@@ -230,17 +244,14 @@ export async function wrapView(env, chatId, mid, arg) {
   }
 }
 
-const PB62_ALPH = "abcdefghijklmnopqrstuvwxyz0123456789";
-function pb62(n) { let s = ""; do { s = PB62_ALPH[n % 36] + s; n = Math.floor(n / 36); } while (n > 0); return s; }
-
 export async function pasteAdd(env, chatId, raw) {
   const L = await uiLang(env);
   const t = String(raw || "").trim();
   if (!t) return reply(env, chatId, L.pasteUsage);
   if (t.length > PASTE_MAX) return reply(env, chatId, L.pasteBig(PASTE_MAX));
-  const id = pb62(Date.now() % 216 + 1) + "-" + pb62(Math.floor(Math.random() * 46655) + 1);
+  const id = rndCode(10);
   await putJSON(env, PASTE_KEY + id, { t, ts: Date.now() }, { ttlMs: PASTE_TTL_MS });
-  const host = env.SHORT_HOST || env.SELF_BASE || "";
+  const host = shortHost(env);
   if (!host) return reply(env, chatId, L.pasteUsage);
   const url = "https://" + host + "/p/" + id;
   return reply(env, chatId, L.pasteMade(esc(t.slice(0, 40) + (t.length > 40 ? "…" : "")), esc(url), t.length, Math.round(PASTE_TTL_MS / 86400000)));

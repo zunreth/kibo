@@ -199,13 +199,16 @@ import {
 import { wxNow } from './feat-ctx.js';
 import { lifeDigest, lifeCron } from './feat-life.js';
 import { addPoints } from './store-d1.js';
+export const REM_SHOW_MAX = 15;
 export function renderReminders(obj, L) {
   L = L || UI.en;
   const list = Object.keys(obj).map(k => ({ id: k, r: obj[k] })).filter(x => x.r && !x.r.done).sort((a, b) => a.r.at - b.r.at);
   if (!list.length) return { text: L.remEmpty, markup: { inline_keyboard: [[{ text: L.home, callback_data: "menu" }]] } };
+  const shown = list.slice(0, REM_SHOW_MAX);
+  const hidden = list.length - shown.length;
   return {
-    text: L.remTitle + UI_SEP + list.map(x => "#" + x.id + " \u2014 " + (x.r.rec ? "\u{1F501} " + esc(recLabelOf(x.r, L)) + " \u2014 " + esc(x.r.text) + " \u2192 next: " + fmtWIB(x.r.at, L) : fmtWIB(x.r.at, L) + " \u2014 " + esc(x.r.text)) + (x.r.fired_ts !== undefined ? L.remWait(x.r.nags || 0) : "")).join("\n"),
-    markup: { inline_keyboard: list.map(x => [{ text: "\u{1F5D1} #" + x.id, callback_data: "rdel:" + x.id }]).concat([[{ text: L.home, callback_data: "menu" }]]) }
+    text: L.remTitle + UI_SEP + shown.map(x => "#" + x.id + " \u2014 " + (x.r.rec ? "\u{1F501} " + esc(recLabelOf(x.r, L)) + " \u2014 " + esc(x.r.text) + " \u2192 next: " + fmtWIB(x.r.at, L) : fmtWIB(x.r.at, L) + " \u2014 " + esc(x.r.text)) + (x.r.fired_ts !== undefined ? L.remWait(x.r.nags || 0) : "")).join("\n") + (hidden ? "\n" + L.remMore(hidden) : ""),
+    markup: { inline_keyboard: shown.map(x => [{ text: "\u{1F5D1} #" + x.id, callback_data: "rdel:" + x.id }]).concat([[{ text: L.home, callback_data: "menu" }]]) }
   };
 }
 
@@ -592,18 +595,20 @@ export async function handleRemind(env, msg, chatId) {
     await notify(env, chatId, L.remRecOk(r.id, esc(mr[4].trim()), esc(recLabelOf(pr, L)), parseInt(mr[2], 10) + ":" + mr[3], fmtWIB(r.at, L)));
     return;
   }
-  const m = body.match(/^(\S+)\s+([\s\S]+)$/);
-  if (!m) {
-    await reply(env, chatId, L.remUsage);
-    return;
+  const tk = body.split(/\s+/).filter(Boolean);
+  let spec = "", target = null;
+  for (let len = Math.min(3, tk.length - 1); len >= 1; len--) {
+    const cand = tk.slice(0, len).join(" ");
+    const t = parseRemind(cand, nowSec);
+    if (t) { spec = cand; target = t; break; }
   }
-  const target = parseRemind(m[1], nowSec);
   if (!target) {
-    await reply(env, chatId, L.remBad);
+    await reply(env, chatId, tk.length > 1 ? L.remBad : L.remUsage);
     return;
   }
-  const r = await addReminder(env, chatId, m[1], m[2].trim());
-  await notify(env, chatId, L.remOk(r.id, esc(m[2].trim()), fmtWIB(r.at, L)));
+  const note = tk.slice(spec.split(" ").length).join(" ");
+  const r = await addReminder(env, chatId, spec, note);
+  await notify(env, chatId, L.remOk(r.id, esc(note), fmtWIB(r.at, L)));
 }
 
 export async function listReminders(env, chatId) {

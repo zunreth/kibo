@@ -301,21 +301,35 @@ async function editHabitView(env, chatId, mid) {
   try { const v = await habitView(env); await tg(env, "editMessageText", { chat_id: chatId, message_id: mid, text: v.text, parse_mode: "HTML", reply_markup: v.markup }); } catch (_) {}
 }
 
-function parseAmt(tok) {
-  const m = String(tok || "").match(/^(\d+(?:[.,]\d+)?)\s*(k|rb)?$/i);
-  if (!m) return null;
-  const n = parseFloat(m[1].replace(",", ".")) * (m[2] ? 1000 : 1);
-  if (!isFinite(n) || n <= 0 || n > 1e12) return null;
-  return Math.floor(n);
+export function normalizeAmountDigits(d) {
+  const s = String(d == null ? "" : d);
+  if (!/^\d[\d.,]*$/.test(s)) return null;
+  const hasDot = s.includes("."), hasComma = s.includes(",");
+  if (hasDot && hasComma) {
+    const last = Math.max(s.lastIndexOf("."), s.lastIndexOf(","));
+    return s.slice(0, last).replace(/[.,]/g, "") + "." + (s.slice(last + 1).replace(/[.,]/g, "") || "0");
+  }
+  const sep = hasDot ? "." : hasComma ? "," : "";
+  if (!sep) return s;
+  const parts = s.split(sep);
+  if (parts.length > 2) return parts.join("");
+  if (parts[1].length === 3) return parts[0] + parts[1];
+  return parts[0] + "." + parts[1];
 }
 export function parseMoney(tok) {
-  const m = String(tok == null ? "" : tok).replace(/[^\d.,a-zA-Z]/g, "").match(/^(\d+(?:[.,]\d+)?)(k|rb|ribu|jt|juta|m)?$/i);
+  const raw = String(tok == null ? "" : tok).trim().toLowerCase().replace(/\s+/g, "");
+  const s = raw.replace(/^(rp|idr)[.:]?/, "");
+  const m = s.match(/^(\d[\d.,]*)(k|rb|ribu|jt|juta|mio|miliar|m|b)?$/);
   if (!m) return null;
-  const mult = /^(k|rb|ribu)$/i.test(m[2] || "") ? 1e3 : /^(jt|juta|m)$/i.test(m[2] || "") ? 1e6 : 1;
-  const n = parseFloat(m[1].replace(",", ".")) * mult;
-  if (!isFinite(n) || n <= 0 || n > 1e12) return null;
+  const num = normalizeAmountDigits(m[1]);
+  if (num === null) return null;
+  const unit = m[2] || "";
+  const mult = /^(k|rb|ribu)$/.test(unit) ? 1e3 : /^(jt|juta|mio|m)$/.test(unit) ? 1e6 : /^(miliar|b)$/.test(unit) ? 1e9 : 1;
+  const n = parseFloat(num) * mult;
+  if (!isFinite(n) || n <= 0 || n > 1e13) return null;
   return Math.floor(n);
 }
+const parseAmt = parseMoney;
 const CAT_RE = /(?:^|\s)#([\p{L}0-9_-]{1,20})/gu;
 export function splitCat(note) {
   const raw = String(note == null ? "" : note);
@@ -420,7 +434,7 @@ export async function handleBeli(env, msg, chatId) {
 }
 
 export async function expenseAdd(env, amtTok, note) {
-  const amt = parseAmt(String(amtTok == null ? "" : amtTok).replace(/[^\d.,k rbK RB]/gi, ""));
+  const amt = parseMoney(amtTok);
   if (amt === null) return { ok: false, why: "bad" };
   const parsed = splitCat(note);
   const rec = { ts: Date.now(), amt, note: parsed.note.slice(0, EXP_NOTE_CAP) };

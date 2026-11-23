@@ -466,13 +466,16 @@ function memAge(ms, L) {
   return d <= 0 ? L.memAgeToday : d === 1 ? L.memAge1d : L.memAgeNd(d);
 }
 
+export const MEM_SHOW_MAX = 20;
+const MEM_LIST_CAP = 140;
 export function renderMemories(list, L) {
   L = L || UI.en;
-  L = L || UI.en;
   if (!list.length) return { text: L.memEmpty, markup: { inline_keyboard: [[{ text: L.home, callback_data: "menu" }]] } };
+  const shown = list.slice(-MEM_SHOW_MAX);
+  const hidden = list.length - shown.length;
   return {
-    text: L.memTitle + (list.length ? UI_SEP + list.map(x => "#" + x.id + " \u2014 " + esc(x.text) + " <i>" + ((x.src === "auto" ? L.memSrcAuto : L.memSrcMan) + (x.ts ? " \u00b7 " + memAge(x.ts, L) : "")) + "</i>").join("\n") : ""),
-    markup: { inline_keyboard: list.map(x => [{ text: "\u{1F5D1} #" + x.id, callback_data: "mdel:" + x.id }]).concat([[{ text: L.home, callback_data: "menu" }]]) }
+    text: L.memTitle + (shown.length ? UI_SEP + shown.map(x => "#" + x.id + " \u2014 " + esc(String(x.text).length > MEM_LIST_CAP ? String(x.text).slice(0, MEM_LIST_CAP) + "\u2026" : x.text) + " <i>" + ((x.src === "auto" ? L.memSrcAuto : L.memSrcMan) + (x.ts ? " \u00b7 " + memAge(x.ts, L) : "")) + "</i>").join("\n") + (hidden ? "\n" + L.memMore(hidden) : "") : ""),
+    markup: { inline_keyboard: shown.map(x => [{ text: "\u{1F5D1} #" + x.id, callback_data: "mdel:" + x.id }]).concat([[{ text: L.home, callback_data: "menu" }]]) }
   };
 }
 
@@ -584,7 +587,8 @@ export async function handleExport(env, msg, chatId) {
   if (!fmt) { await reply(env, chatId, L.expUsage); return; }
   const hist = (await getJSON(env, CHAT_HIST_KEY, [])).filter(m => m && m.content);
   if (!hist.length) { await reply(env, chatId, L.expNone); return; }
-  const sum = await getJSON(env, HIST_SUM_KEY, null);
+  const actCard = await env.KV.get(CHAR_ACTIVE_KEY);
+  const sum = await getJSON(env, actCard ? HIST_SUM_KEY + "_" + actCard : HIST_SUM_KEY, null);
   const persona = await getJSON(env, PERSONA_KEY, null);
   const name = persona && persona.name ? persona.name : "user";
   let payload, fname, ctype;

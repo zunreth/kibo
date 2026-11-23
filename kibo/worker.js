@@ -91,7 +91,7 @@ import {
 import { askSet, askGet, askClear } from './src/ask.js';
 import { cronBeat } from './src/cron-ledger.js';
 import { hcPing } from './src/health.js';
-import { handleDoctor } from './src/feat-doctor.js';
+import { handleDoctor, doctorView } from './src/feat-doctor.js';
 const ASK_ROUTES = { rp: rpAsk, sfan: gameFanAsk };
 import {
   STAMP_LAST,
@@ -118,7 +118,7 @@ import {
   bumpCmd,
 } from './src/kv.js';
 import { wrapStore, d1Sweep, shadowSync } from './src/store-d1.js';
-import { seenUpdate, cronLock, cronUnlock } from './src/once.js';
+import { seenUpdate, forgetUpdate, cronLock, cronUnlock } from './src/once.js';
 import { handleNotify } from './src/feat-notify.js';
 import { handleDebug, handleDbgFlag, dbgLog, renderDebugView, renderLogView, setDebug, clearDbgRing, armStream } from './src/feat-debug.js';
 import { handleChain, chainStartCb, chainQuitCb, chainQuit2Cb, chainViewCb } from './src/feat-chain.js';
@@ -392,7 +392,10 @@ export default {
 
     if (!isProbe && await seenUpdate(runEnv, update)) return new Response("ok", { status: 200 });
 
-    const p = handleUpdate(update, runEnv).catch(e => onUpdErr(runEnv, e));
+    const p = handleUpdate(update, runEnv).catch(async e => {
+      await forgetUpdate(runEnv, update);
+      return onUpdErr(runEnv, e);
+    });
     ctx.waitUntil(p);
     let toId = null;
     try {
@@ -822,6 +825,7 @@ async function handleCallback(env, cb) {
     else if (arg === "nhpdf") view = await renderNhPdfqView(env);
     else if (arg === "nhstats") view = await renderNhStatsView(env);
     else if (arg === "dbg") view = await renderDebugView(env);
+    else if (arg === "doctor") view = await doctorView(env);
     else if (arg === "divecfg") view = await renderDiveCfg(env);
     else if (arg === "vault") view = await renderVault(env, L);
     else if (arg === "model") view = await renderModelView(env);

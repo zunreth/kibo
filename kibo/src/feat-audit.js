@@ -54,6 +54,53 @@ export async function auditBefore(env, name, chatId) {
   }
 }
 
+const sameVal = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+const isPlainObj = v => !!v && typeof v === "object" && !Array.isArray(v);
+const recKey = e => (e && typeof e === "object")
+  ? (e.id !== undefined ? "i:" + e.id : (e.ts !== undefined ? "t:" + e.ts : "c:" + JSON.stringify(e)))
+  : "v:" + JSON.stringify(e);
+
+export function revertValue(prev, post, cur) {
+  if (sameVal(prev, post)) return cur;
+  if (Array.isArray(prev) && Array.isArray(post) && Array.isArray(cur)) {
+    const prevMap = new Map(prev.map(e => [recKey(e), e]));
+    const postMap = new Map(post.map(e => [recKey(e), e]));
+    const added = new Set([...postMap.keys()].filter(k => !prevMap.has(k)));
+    let out = cur.filter(e => !added.has(recKey(e)));
+    const have = new Set(out.map(recKey));
+    for (const [k, e] of prevMap) {
+      if (postMap.has(k) || have.has(k)) continue;
+      out.push(e);
+      have.add(k);
+    }
+    out = out.map(e => {
+      const k = recKey(e);
+      if (!k || !prevMap.has(k) || !postMap.has(k)) return e;
+      const before = prevMap.get(k), after = postMap.get(k);
+      if (sameVal(before, after)) return e;
+      return sameVal(e, after) ? before : e;
+    });
+    return out;
+  }
+  if (isPlainObj(prev) && isPlainObj(post) && isPlainObj(cur)) {
+    const out = Object.assign({}, cur);
+    for (const k of Object.keys(post)) {
+      if (k in prev) continue;
+      if (sameVal(out[k], post[k])) delete out[k];
+    }
+    for (const k of Object.keys(prev)) {
+      if (k in post) continue;
+      if (out[k] === undefined) out[k] = prev[k];
+    }
+    for (const k of Object.keys(post)) {
+      if (!(k in prev) || sameVal(prev[k], post[k])) continue;
+      if (sameVal(out[k], post[k])) out[k] = prev[k];
+    }
+    return out;
+  }
+  return sameVal(cur, post) ? prev : cur;
+}
+
 export async function auditAfter(env, snap, label) {
   if (!snap) return null;
   try {
@@ -61,7 +108,8 @@ export async function auditAfter(env, snap, label) {
     for (const s of snap.snaps) {
       let cur = null;
       try { cur = await getJSON(env, s.key, null); } catch (_) {}
-      if (JSON.stringify(cur) !== JSON.stringify(s.prev)) { changed = true; break; }
+      s.post = cur;
+      if (!changed && JSON.stringify(cur) !== JSON.stringify(s.prev)) changed = true;
     }
     if (!changed) return null;
     const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
@@ -94,8 +142,11 @@ export async function undoAudit(env, id) {
     if (!Array.isArray(snaps)) return { ok: false, why: "expired" };
     for (const s of snaps) {
       if (!s || !s.key) continue;
-      if (s.prev === null || s.prev === undefined) { try { await env.KV.delete(s.key); } catch (_) {} }
-      else { try { await putJSON(env, s.key, s.prev); } catch (_) {} }
+      const hasPost = Object.prototype.hasOwnProperty.call(s, "post");
+      const cur = await getJSON(env, s.key, null);
+      const next = hasPost ? revertValue(s.prev, s.post, cur) : s.prev;
+      if (next === null || next === undefined) { try { await env.KV.delete(s.key); } catch (_) {} }
+      else if (!sameVal(next, cur)) { try { await putJSON(env, s.key, next); } catch (_) {} }
     }
     try { await env.KV.delete(AUDIT_SNAP_PREFIX + entry.id); } catch (_) {}
     const rest = arr.filter(e => e && e.id !== entry.id);

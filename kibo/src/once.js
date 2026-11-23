@@ -42,6 +42,13 @@ export async function seenUpdate(env, update) {
   }
 }
 
+export async function forgetUpdate(env, update) {
+  try {
+    const fp = updateFingerprint(update);
+    if (fp) await env.KV.delete(UPDATE_SEEN_PREFIX + fp);
+  } catch (_) {}
+}
+
 export const CRON_LOCK_KEY = "cron_lock";
 export const CRON_LOCK_MS = 120 * 1000;
 

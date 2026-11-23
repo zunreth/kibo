@@ -374,7 +374,7 @@ export async function vaultDoRename(env, id, newName, chatId) {
   await notify(env, chatId, L.renamed(esc(f.name)));
 }
 
-export const SNAP_KEYS = [CHAT_HIST_KEY, PERSONA_KEY, CHAR_KEY, CHAR_ACTIVE_KEY, PRESET_KEY, "mail_hist", "reminders", MEM_KEY, STATS_KEY, "feeds", LANG_KEY, LEN_KEY, UI_LANG_KEY, "owner_chat", VAULT_CFG_KEY, "quest", "quest_rr", "exp", "tts_out", "squest", PLOT_DIR_KEY, SCENE_KEY];
+export const SNAP_KEYS = [CHAT_HIST_KEY, HIST_SUM_KEY, PERSONA_KEY, CHAR_KEY, CHAR_ACTIVE_KEY, PRESET_KEY, "mail_hist", "reminders", MEM_KEY, STATS_KEY, "feeds", LANG_KEY, LEN_KEY, UI_LANG_KEY, "owner_chat", VAULT_CFG_KEY, "quest", "quest_rr", "exp", "tts_out", "squest", PLOT_DIR_KEY, SCENE_KEY];
 
 export async function vaultBackup(env, chatId, silent) {
   try {
