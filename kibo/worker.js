@@ -331,7 +331,7 @@ import { handleAnime, handleWx, handleNp } from './src/feat-ctx.js';
 import { renderVibeView, handleVibe, setVibe, clearKnobField, purgeKnobs, handleOutfit, handlePlot, handleDice, handleOoc, renderRpMenu, renderOutfitView, renderPlotView, handleRpReset, rpAsk } from './src/feat-rp.js';
 import { handleRp, handleScene, renderRpSavesView, rpSaveSlot, rpRestoreSlot, rpDelSlot, getScene } from './src/feat-story.js';
 import { renderAistatsHub, renderAistatDetail, aistWrapped } from './src/feat-aistats.js';
-import { handleFocus, handleSleep, handleHabit, handleBeli, handleCapsule, handleHabitCb, focusIntercept, handleHplanCb, handleCountdown, handleAma, handleAlarm, fReact } from './src/feat-life.js';
+import { handleFocus, handleSleep, handleHabit, handleBeli, handleCur, handleCapsule, handleHabitCb, focusIntercept, handleHplanCb, handleCountdown, handleAma, handleAlarm, fReact } from './src/feat-life.js';
 import { handleAudit, undoAudit } from './src/feat-audit.js';
 import {
   buildSys,
@@ -546,6 +546,7 @@ async function handleUpdate(update, env) {
   if (cmd === "/habit" || cmd === "/habits") { await delCmd(env, chatId, msg.message_id); return handleHabit(env, msg, chatId); }
   if (cmd === "/beli") { await delCmd(env, chatId, msg.message_id); return handleBeli(env, msg, chatId); }
   if (cmd === "/exp") { await delCmd(env, chatId, msg.message_id); return handleBeli(env, Object.assign({}, msg, { text: "/beli" + text.slice(cmd.length) }), chatId); }
+  if (cmd === "/cur" || cmd === "/currency") return handleCur(env, msg, chatId);
   if (cmd === "/shop") return handleShop(env, chatId, 0);
   if (cmd === "/gacha") return handleGacha(env, chatId, 0);
   if (cmd === "/inv") return handleInv(env, chatId, 0);

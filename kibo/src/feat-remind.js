@@ -519,13 +519,22 @@ export async function addReminder(env, chatId, spec, text, recInfo) {
   return made;
 }
 
+export function normWhen(spec) {
+  return String(spec == null ? "" : spec).toLowerCase().trim()
+    .replace(/^in\s+(?=\d)/, "")
+    .replace(/^next\s+/, "")
+    .replace(/\s+(?:at|jam|pukul)\s+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 export function parseRec(kindName, hh, mm, nowSec) {
-  kindName = String(kindName || "").toLowerCase().trim();
+  kindName = normWhen(kindName);
   hh = parseInt(hh, 10); mm = parseInt(mm, 10);
   if (isNaN(hh) || isNaN(mm) || hh > 23 || mm > 59) return null;
   const d = new Date((nowSec + WIB) * 1000);
   const base = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), hh, mm, 0) / 1000 - WIB;
-  if (kindName === "hari" || kindName === "day" || kindName === "everyday") {
+  if (kindName === "hari" || kindName === "day" || kindName === "everyday" || kindName === "daily" || kindName === "harian") {
     let target = base;
     if (target <= nowSec) target += 86400;
     return { rec: { kind: "daily" }, target: target };
@@ -546,8 +555,20 @@ function recLabelOf(r, L) {
   return L.recLabel;
 }
 
+export function parseRecSpec(body, nowSec) {
+  const t = String(body == null ? "" : body).trim();
+  const m = /^(\S+)\s+(?:(\S+)\s+)?(\d{1,2})[.:](\d{2})\s+([\s\S]+)$/.exec(t);
+  if (!m) return null;
+  const a = m[1].toLowerCase(), b = (m[2] || "").toLowerCase();
+  let kind = /^(tiap|setiap|every|weekly|mingguan)$/.test(a) ? b : a;
+  if (/^(day|hari|everyday|daily|harian)$/.test(kind)) kind = "day";
+  const pr = parseRec(kind, m[3], m[4], nowSec);
+  if (!pr) return null;
+  return { rec: pr.rec, target: pr.target, hh: parseInt(m[3], 10), mm: m[4], text: m[5].trim() };
+}
+
 export function parseRemind(spec, nowSec) {
-  spec = spec.toLowerCase().trim();
+  spec = normWhen(spec);
   let m;
   if ((m = spec.match(/^(\d+)\s*(detik|s$|sec|seconds?|menit|m$|min|minutes?|jam|j$|h$|hours?|minggu|mng|ming|hari|d$|days?|hr|day)/))) {
     const n = parseInt(m[1], 10);
@@ -576,6 +597,15 @@ export function parseRemind(spec, nowSec) {
     if (target <= nowSec) target += 7 * 86400;
     return target;
   }
+  if ((m = spec.match(/^(senin|selasa|rabu|kamis|jumat|sabtu|minggu|monday|tuesday|wednesday|thursday|friday|saturday|sunday)$/))) {
+    const want = DAYS[m[1]];
+    const d = new Date((nowSec + WIB) * 1000);
+    const base = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), 0, 0, 0) / 1000;
+    const diff = (want - d.getUTCDay() + 7) % 7;
+    let target = base + diff * 86400 + 9 * 3600 - WIB;
+    if (target <= nowSec) target += 7 * 86400;
+    return target;
+  }
   return null;
 }
 
@@ -584,15 +614,15 @@ export async function handleRemind(env, msg, chatId) {
   const body = (msg.text || "").replace(/^\/\S+\s*/, "").trim();
   const nowSec = Math.floor(Date.now() / 1000);
 
-  const mr = body.match(/^tiap\s+(\S+)\s+(\d{1,2})[.:](\d{2})\s+([\s\S]+)$/i);
-  if (mr) {
-    const pr = parseRec(mr[1], mr[2], mr[3], nowSec);
+  const tri = body.match(/^(tiap|setiap|every|daily|weekly|harian|mingguan)\b/i);
+  if (tri) {
+    const pr = parseRecSpec(body, nowSec);
     if (!pr) {
-      await reply(env, chatId, L.remRecBad(esc(mr[1])));
+      await reply(env, chatId, L.remRecBad(esc(body.split(/\s+/).slice(1, 2).join(" "))));
       return;
     }
-    const r = await addReminder(env, chatId, null, mr[4].trim(), pr);
-    await notify(env, chatId, L.remRecOk(r.id, esc(mr[4].trim()), esc(recLabelOf(pr, L)), parseInt(mr[2], 10) + ":" + mr[3], fmtWIB(r.at, L)));
+    const r = await addReminder(env, chatId, null, pr.text, { rec: pr.rec, target: pr.target });
+    await notify(env, chatId, L.remRecOk(r.id, esc(pr.text), esc(recLabelOf({ rec: pr.rec, target: pr.target }, L)), pr.hh + ":" + pr.mm, fmtWIB(r.at, L)));
     return;
   }
   const tk = body.split(/\s+/).filter(Boolean);

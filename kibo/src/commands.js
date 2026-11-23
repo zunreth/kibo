@@ -24,6 +24,7 @@ export const COMMANDS = [
   { c: "sleep", cat: "daily", d: "sleep log: /sleep gn before bed, /sleep gm when you wake", ex: "/sleep gn" },
   { c: "beli", cat: "money", d: "log an expense: /beli 25k <note>, or /beli recap for the month", ex: "/beli 25k coffee #food" },
   { c: "exp", cat: "money", d: "money v2: /exp 25k coffee #food, /exp budget 2jt, /exp recap", ex: "/exp budget food 500rb" },
+  { c: "cur", cat: "money", d: "show or set the main currency (what a bare amount means): Rp, $, S$, RM, EUR, GBP", ex: "/cur USD" },
   { c: "j", cat: "daily", d: "write a journal entry", ex: "/j rough day today #mood" },
   { c: "countdown", cat: "daily", d: "count down to a date: /countdown <name> <YYYY-MM-DD> (fires on the day)", ex: "/countdown vacation 2026-01-10" },
   { c: "weather", cat: "daily", d: "current weather (first time: set city)", ex: "/weather jakarta" },

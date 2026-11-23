@@ -12,6 +12,7 @@ import {
   habitCheck, expenseAdd, dayWIB, monWIB, rp, wkOf, sleepMark, focusStart, focusEnd, focusState,
   expSummary, expBudget, capsuleItems, capsulePending, capsuleAdd, capsuleDel,
 } from './feat-life.js';
+import { sumByCur, fmtMoney, mainCur, loadMainCur, curOf } from './money.js';
 import { rlItems, rlAddCore, rlSetDone, rlRemove, shorten, hnTop } from './feat-b8.js';
 import { getActiveCard } from './feat-chars.js';
 import { geocode, wxLine } from './feat-ctx.js';
@@ -112,7 +113,11 @@ export async function agentStatus(env) {
 
   const mon = monWIB(sec);
   const rows = (spend || []).filter(e => e && typeof e.amt === "number" && monWIB(Math.floor(e.ts / 1000)) === mon);
-  out.push("spending " + mon + ": " + rp(rows.reduce((s, e) => s + e.amt, 0)) + " across " + rows.length + " entries");
+  const sums = sumByCur(rows, mainCur());
+  const moneyTxt = sums.length === 1
+    ? fmtMoney(sums[0].total, sums[0].cur)
+    : sums.map(x => fmtMoney(x.total, x.cur) + " (" + x.n + ")").join(" + ");
+  out.push("spending " + mon + ": " + (sums.length ? moneyTxt : "nothing logged") + " across " + rows.length + " entries");
 
   const jr = (journal || []).filter(e => e && e.ts);
   const week = jr.filter(e => Date.now() - e.ts < 7 * 86400000);
@@ -197,22 +202,30 @@ export async function agentExpense(env, a) {
   const amt = a && (a.amount ?? a.amt ?? a.value);
   const note = esc1(a && (a.note || a.text || a.for));
   if (/^(summary|list|read|stats|report)$/i.test(String((a && a.action) || ""))) {
+    await loadMainCur(env);
     const mon = monWIB(nowS());
     const arr = (await getJSON(env, EXP_KEY, [])).filter(e => e && typeof e.amt === "number");
     const sum = expSummary(arr, mon, await expBudget(env));
-    if (!sum.rows.length) return "no spending logged in " + mon + " yet";
-    const lines = ["spending " + mon + ": " + rp(sum.total) + " across " + sum.rows.length + " entries"];
-    for (const c of sum.cats) lines.push("· " + c.cat + ": " + rp(c.amt) + " (" + c.n + " entries, " + Math.round(c.amt / sum.total * 100) + "%)" + (sum.catCaps[c.cat] ? " of " + rp(sum.catCaps[c.cat]) : ""));
-    if (sum.cap) lines.push("monthly budget " + rp(sum.cap) + " — " + (sum.left >= 0 ? rp(sum.left) + " left (" + sum.pct + "% used)" : "over by " + rp(-sum.left)));
-    const big = sum.rows.slice().sort((x, y) => y.amt - x.amt)[0];
-    if (big) lines.push("biggest: " + rp(big.amt) + " — " + esc1(big.note || "-"));
-    return lines.join("\n");
+    if (!sum.rows.length && !sum.others.length) return "no spending logged in " + mon + " yet";
+    const one = bb => {
+      if (!bb.rows.length) return null;
+      const lines = ["spending " + mon + " (" + bb.cur + "): " + rp(bb.total, bb.cur) + " across " + bb.rows.length + " entries"];
+      for (const c of bb.cats) lines.push("· " + c.cat + ": " + rp(c.amt, bb.cur) + " (" + c.n + " entries, " + Math.round(c.amt / bb.total * 100) + "%)" + (bb.catCaps[c.cat] ? " of " + rp(bb.catCaps[c.cat], bb.cur) : ""));
+      if (bb.cap) lines.push("monthly budget " + rp(bb.cap, bb.cur) + " — " + (bb.left >= 0 ? rp(bb.left, bb.cur) + " left (" + bb.pct + "% used)" : "over by " + rp(-bb.left, bb.cur)));
+      const big = bb.rows.slice().sort((x, y) => y.amt - x.amt)[0];
+      if (big) lines.push("biggest: " + rp(big.amt, bb.cur) + " — " + esc1(big.note || "-"));
+      return lines.join("\n");
+    };
+    return [one(sum)].concat(sum.others.map(one)).filter(Boolean).join("\n\n") +
+      (sum.others.length ? "\n(each currency is its own bucket \u2014 kibo has no exchange rate, so they are never added)" : "");
   }
-  if (amt === undefined || amt === null || String(amt).trim() === "") return "error: how much? pass amount (e.g. 25000 or \"25k\")";
+  if (amt === undefined || amt === null || String(amt).trim() === "") return "error: how much? pass amount (e.g. 25000, \"25k\", \"$12.50\")";
   const r = await expenseAdd(env, amt, note);
-  if (!r.ok) return "error: could not read that amount (" + esc1(amt) + ") — pass a plain number like 25000 or 25k";
-  return "logged " + rp(r.amt) + (r.note ? " — " + r.note : "") + (r.cat && r.cat !== "other" ? " [" + r.cat + "]" : "") +
-    " · this month " + rp(r.total) + " across " + r.n + " entries" + (r.cap ? " (" + (r.left >= 0 ? rp(r.left) + " left of " + rp(r.cap) : "over budget by " + rp(-r.left)) + ")" : "");
+  if (!r.ok) return "error: could not read that amount (" + esc1(amt) + ") — pass a plain number like 25000 or 25k, or a currency form like \"$12.50\" or \"S$8\"";
+  return "logged " + rp(r.amt, r.cur) + (r.note ? " — " + r.note : "") + (r.cat && r.cat !== "other" ? " [" + r.cat + "]" : "") +
+    " · this month " + rp(r.total, r.cur) + " across " + r.n + " entries" +
+    (r.cap ? " (" + (r.left >= 0 ? rp(r.left, r.cur) + " left of " + rp(r.cap, r.cur) : "over budget by " + rp(-r.left, r.cur)) + ")" : "") +
+    (r.others && r.others.length ? " · also " + r.others.map(o => rp(o.total, o.cur)).join(", ") : "");
 }
 
 export async function agentCountdown(env, a) {

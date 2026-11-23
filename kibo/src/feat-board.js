@@ -6,8 +6,9 @@ import {
   HABITS_KEY, EXP_KEY, COUNTDOWN_KEY, FOCUS_LOG_KEY,
 } from './consts.js';
 import {
-  dayWIB, monWIB, rp, expSummary, expBudget, focusState,
+  dayWIB, monWIB, rp, expSummary, expBudget, focusState, expOtherLine,
 } from './feat-life.js';
+import { sumByCur, mainCur, curOf } from './money.js';
 import { activeReminders, agentSearch } from './feat-agent.js';
 import { todoList, sortTodos } from './feat-todo.js';
 import { wxNow } from './feat-ctx.js';
@@ -104,7 +105,7 @@ export async function briefText(env, chatId, L) {
   else out.push("\u{1F634} <b>" + L.brLblSleep + "</b> \u00B7 " + L.brNoSleep);
 
   out.push("\u{1F4B8} <b>" + L.brLblMoney + "</b> \u00B7 " + (s.spend.rows.length
-    ? rp(s.spend.total) + (s.spend.cap ? " / " + rp(s.spend.cap) + " (" + s.spend.pct + "%)" : "") + " \u00B7 " + L.brSpendN(s.spend.rows.length, s.spend.cats[0] ? s.spend.cats[0].cat : "-")
+    ? rp(s.spend.total, s.spend.cur) + (s.spend.cap ? " / " + rp(s.spend.cap, s.spend.cur) + " (" + s.spend.pct + "%)" : "") + " \u00B7 " + L.brSpendN(s.spend.rows.length, s.spend.cats[0] ? s.spend.cats[0].cat : "-") + expOtherLine(L, s.spend)
     : L.brNoSpend));
 
   const up = s.countdowns.map(c => ({ c, d: daysUntil(c.day) })).filter(x => x.d !== null && x.d >= 0).sort((a, b) => a.d - b.d)[0];
@@ -178,7 +179,7 @@ export async function nowView(env, chatId) {
   const lastNight = s.sleepLog[0];
   if (s.gn) out.push("\u{1F634} <b>" + L.brLblSleep + "</b> \u00B7 " + L.brSleepOpen(hhmm(Number(s.gn))));
   else if (lastNight) out.push("\u{1F634} <b>" + L.brLblSleep + "</b> \u00B7 " + L.brSleepLast(lastNight.h));
-  out.push("\u{1F4B8} <b>" + L.brLblMoney + "</b> \u00B7 " + (s.spend.rows.length ? rp(s.spend.total) + (s.spend.cap ? " / " + rp(s.spend.cap) + " (" + s.spend.pct + "%)" : "") : L.brNoSpend));
+  out.push("\u{1F4B8} <b>" + L.brLblMoney + "</b> \u00B7 " + (s.spend.rows.length ? rp(s.spend.total, s.spend.cur) + (s.spend.cap ? " / " + rp(s.spend.cap, s.spend.cur) + " (" + s.spend.pct + "%)" : "") + expOtherLine(L, s.spend) : L.brNoSpend));
   const up = s.countdowns.map(c => ({ c, d: daysUntil(c.day) })).filter(x => x.d !== null && x.d >= 0).sort((a, b) => a.d - b.d)[0];
   if (up) out.push("\u23F3 <b>" + L.brLblCd + "</b> \u00B7 " + esc(trim1(up.c.name)) + " " + L.brInDays(up.d));
   out.push("\u2500\u2500\u2500\n" + L.nowUpdated(hhmm(s.sec)));
@@ -244,12 +245,15 @@ export async function reportText(env, chatId, L) {
   }
 
   const week = s.spend.rows.filter(e => Math.floor(e.ts / 1000) >= from);
+  const weekByCur = sumByCur(week, mainCur());
   if (week.length) {
-    const total = week.reduce((a, b) => a + b.amt, 0);
+    const mainW = weekByCur.find(w => w.cur === mainCur()) || weekByCur[0];
+    const wrows = week.filter(e => curOf(e, mainCur()) === mainW.cur);
     const byCat = new Map();
-    for (const e of week) { const c = String(e.cat || "other"); byCat.set(c, (byCat.get(c) || 0) + e.amt); }
+    for (const e of wrows) { const c = String(e.cat || "other"); byCat.set(c, (byCat.get(c) || 0) + e.amt); }
     const top = Array.from(byCat.entries()).sort((a, b) => b[1] - a[1])[0];
-    out.push("\u{1F4B8} <b>" + L.brLblMoney + "</b> \u00B7 " + L.rpMoney(rp(total), week.length, top ? top[0] : "-", top ? rp(top[1]) : "-"));
+    const also = weekByCur.filter(w => w.cur !== mainW.cur).map(w => rp(w.total, w.cur)).join(", ");
+    out.push("\u{1F4B8} <b>" + L.brLblMoney + "</b> \u00B7 " + L.rpMoney(rp(mainW.total, mainW.cur), wrows.length, top ? top[0] : "-", top ? rp(top[1], mainW.cur) : "-") + (also ? " + " + also : ""));
   } else out.push("\u{1F4B8} <b>" + L.brLblMoney + "</b> \u00B7 " + L.brNoSpend);
 
   const jn = (journal || []).filter(e => e && e.ts && Math.floor(e.ts / 1000) >= from).length;

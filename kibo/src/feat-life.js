@@ -21,13 +21,14 @@ import { addPts, parseRemind, remindMsg } from './feat-remind.js';
 import { getActiveCard } from './feat-chars.js';
 import { chatStream } from './feat-personal.js';
 import { stripThink } from './ai.js';
+import { parseAmount, fmtMoney, curOf, sumByCur, loadMainCur, mainCur, normCur, roundMoney, curToken, isCur, setMainCur, MAIN_CUR_KEY, CURS, CUR_CODES } from './money.js';
 
 const nowS = () => Math.floor(Date.now() / 1000);
 const dayWIB = sec => { const d = new Date(((sec || nowS()) + WIB) * 1000); const p = n => String(n).padStart(2, "0"); return d.getUTCFullYear() + "-" + p(d.getUTCMonth() + 1) + "-" + p(d.getUTCDate()); };
 const monWIB = sec => dayWIB(sec).slice(0, 7);
 const dowWIB = sec => new Date(((sec || nowS()) + WIB) * 1000).getUTCDay();
 const wkOf = sec => { const t = (sec || nowS()) + WIB; const d = new Date(t * 1000); const mon = new Date((t - ((d.getUTCDay() + 6) % 7) * 86400) * 1000); const p = n => String(n).padStart(2, "0"); return mon.getUTCFullYear() + "-" + p(mon.getUTCMonth() + 1) + "-" + p(mon.getUTCDate()); };
-const rp = n => "Rp" + String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+const rp = (n, cur) => fmtMoney(n, cur || mainCur());
 
 async function lifeMsg(env, event, hint) {
   try { return await remindMsg(env, 0, event, 0, "life:" + hint); } catch (_) { return ""; }
@@ -316,20 +317,8 @@ export function normalizeAmountDigits(d) {
   if (parts[1].length === 3) return parts[0] + parts[1];
   return parts[0] + "." + parts[1];
 }
-export function parseMoney(tok) {
-  const raw = String(tok == null ? "" : tok).trim().toLowerCase().replace(/\s+/g, "");
-  const s = raw.replace(/^(rp|idr)[.:]?/, "");
-  const m = s.match(/^(\d[\d.,]*)(k|rb|ribu|jt|juta|mio|miliar|m|b)?$/);
-  if (!m) return null;
-  const num = normalizeAmountDigits(m[1]);
-  if (num === null) return null;
-  const unit = m[2] || "";
-  const mult = /^(k|rb|ribu)$/.test(unit) ? 1e3 : /^(jt|juta|mio|m)$/.test(unit) ? 1e6 : /^(miliar|b)$/.test(unit) ? 1e9 : 1;
-  const n = parseFloat(num) * mult;
-  if (!isFinite(n) || n <= 0 || n > 1e13) return null;
-  return Math.floor(n);
-}
-const parseAmt = parseMoney;
+export const parseMoney = tok => { const r = parseAmount(tok, mainCur()); return r ? r.amt : null; };
+export const parseAmt = tok => parseMoney(tok);
 const CAT_RE = /(?:^|\s)#([\p{L}0-9_-]{1,20})/gu;
 export function splitCat(note) {
   const raw = String(note == null ? "" : note);
@@ -342,62 +331,101 @@ export function splitCat(note) {
   const clean = raw.replace(CAT_RE, " ").replace(/\s+/g, " ").trim();
   return { note: clean, cat: cats[0].slice(0, EXP_CAT_CAP) };
 }
-function mtdOf(arr, mon) {
-  const rows = arr.filter(e => monWIB(Math.floor(e.ts / 1000)) === mon);
-  const total = rows.reduce((a, b) => a + b.amt, 0);
+function mtdOf(arr, mon, cur) {
+  const m = mainCur();
+  const rows = arr.filter(e => monWIB(Math.floor(e.ts / 1000)) === mon && curOf(e, m) === cur);
+  const total = roundMoney(rows.reduce((a, b) => a + b.amt, 0), cur);
   const big = rows.reduce((a, b) => (b.amt > ((a && a.amt) || 0) ? b : a), null);
   return { rows, total, big };
 }
-const bigTxt = b => (b ? rp(b.amt) + " \u2014 " + esc(b.note || "-") : "-");
+const bigTxt = (b, cur) => (b ? rp(b.amt, cur) + " \u2014 " + esc(b.note || "-") : "-");
 
-export function expSummary(arr, mon, budget) {
-  const { rows, total, big } = mtdOf(arr, mon);
-  const byCat = new Map();
-  for (const e of rows) {
-    const c = String(e.cat || EXP_CAT_DEFAULT).toLowerCase();
-    const cur = byCat.get(c) || { cat: c, amt: 0, n: 0 };
-    cur.amt += e.amt; cur.n += 1;
-    byCat.set(c, cur);
+export function expSummary(arr, mon, budget, cur) {
+  const m = mainCur();
+  const want = normCur(cur, m);
+  const by = new Map();
+  for (const e of arr || []) {
+    if (!e || typeof e.amt !== "number") continue;
+    if (monWIB(Math.floor(e.ts / 1000)) !== mon) continue;
+    const c = curOf(e, m);
+    if (!by.has(c)) by.set(c, []);
+    by.get(c).push(e);
   }
-  const cats = Array.from(byCat.values()).sort((a, b) => b.amt - a.amt);
-  const cap = Number(budget && budget.total) || 0;
-  return { mon, rows, total, big, cats, catCaps: (budget && budget.cats) || {}, cap, left: cap ? cap - total : 0, pct: cap ? Math.round(total / cap * 100) : 0 };
+  const bucket = c => {
+    const { rows, total, big } = mtdOf(by.get(c) || [], mon, c);
+    const byCat = new Map();
+    for (const e of rows) {
+      const k = String(e.cat || EXP_CAT_DEFAULT).toLowerCase();
+      const cur2 = byCat.get(k) || { cat: k, amt: 0, n: 0 };
+      cur2.amt = roundMoney(cur2.amt + e.amt, c); cur2.n += 1;
+      byCat.set(k, cur2);
+    }
+    const cats = Array.from(byCat.values()).sort((a, b) => b.amt - a.amt);
+    const bud = budgetFor(budget, c);
+    const cap = Number(bud.total) || 0;
+    return {
+      mon, cur: c, rows, total, big, cats, catCaps: bud.cats || {}, cap,
+      left: cap ? roundMoney(cap - total, c) : 0, pct: cap ? Math.round(total / cap * 100) : 0,
+    };
+  };
+  const main = bucket(want);
+  main.others = [...by.keys()].filter(c => c !== want).map(bucket);
+  return main;
+}
+export function expOtherLine(L, s) {
+  if (!s || !s.others || !s.others.length) return "";
+  const parts = s.others.map(o => rp(o.total, o.cur) + (o.rows.length > 1 ? " (" + o.rows.length + ")" : ""));
+  return "\n" + (L && L.bAlso ? L.bAlso(parts.join(", ")) : "also: " + parts.join(", "));
 }
 export function expCatLines(L, s, max) {
   if (!s.cats.length) return "";
   return s.cats.slice(0, max || 5).map(c => {
     const pct = s.total ? Math.round(c.amt / s.total * 100) : 0;
-    const cap = s.catCaps && s.catCaps[c.cat] ? " / " + rp(s.catCaps[c.cat]) : "";
-    return L.bCatRow(c.cat, rp(c.amt) + cap, pct);
+    const cap = s.catCaps && s.catCaps[c.cat] ? " / " + rp(s.catCaps[c.cat], s.cur) : "";
+    return L.bCatRow(c.cat, rp(c.amt, s.cur) + cap, pct);
   }).join("\n");
 }
 export function expBudgetLine(L, s) {
   if (!s.cap) return L.bNoBudget;
-  if (s.pct > 100) return L.bOver(rp(s.total), rp(s.cap), s.pct, rp(-s.left));
+  if (s.pct > 100) return L.bOver(rp(s.total, s.cur), rp(s.cap, s.cur), s.pct, rp(-s.left, s.cur));
   const filled = Math.min(10, Math.max(0, Math.round(s.pct / 10)));
-  return L.bBudget(rp(s.total), rp(s.cap), s.pct, rp(s.left), "\u2588".repeat(filled) + "\u2591".repeat(10 - filled));
+  return L.bBudget(rp(s.total, s.cur), rp(s.cap, s.cur), s.pct, rp(s.left, s.cur), "\u2588".repeat(filled) + "\u2591".repeat(10 - filled));
 }
 function budgetCard(L, s) {
-  const body = [L.bMtd(rp(s.total), s.rows.length, bigTxt(s.big)), expBudgetLine(L, s)];
+  const body = [L.bMtd(rp(s.total, s.cur), s.rows.length, bigTxt(s.big, s.cur)), expBudgetLine(L, s)];
   const cats = expCatLines(L, s, 6);
   if (cats) body.push(cats);
   return body.join("\n");
 }
-export async function expBudget(env) {
-  const b = await getJSON(env, EXP_BUDGET_KEY, null);
-  return { total: Number(b && b.total) || 0, cats: (b && b.cats) || {} };
+function budgetFor(budget, cur) {
+  const b = budget || {};
+  const c = cur && b.curs && b.curs[cur];
+  if (c) return { total: Number(c.total) || 0, cats: c.cats || {} };
+  if (cur === mainCur()) return { total: Number(b.total) || 0, cats: b.cats || {} };
+  return { total: 0, cats: {} };
 }
-export async function setBudget(env, total, cat) {
+export async function expBudget(env) {
+  const b = await getJSON(env, EXP_BUDGET_KEY, null) || {};
+  return { total: Number(b.total) || 0, cats: b.cats || {}, curs: b.curs || {} };
+}
+export async function setBudget(env, total, cat, cur) {
   const b = await expBudget(env);
-  if (cat) {
-    const n = Math.max(0, Math.round(total));
-    if (n) b.cats[cat] = n; else delete b.cats[cat];
-  } else b.total = Math.max(0, Math.round(total));
+  const c = normCur(cur, mainCur());
+  const n = Math.max(0, Math.round(Number(total) || 0));
+  if (c === mainCur()) {
+    if (cat) { if (n) b.cats[cat] = n; else delete b.cats[cat]; } else b.total = n;
+  } else {
+    const box = b.curs[c] || { total: 0, cats: {} };
+    if (cat) { box.cats = box.cats || {}; if (n) box.cats[cat] = n; else delete box.cats[cat]; } else box.total = n;
+    b.curs[c] = box;
+  }
   await putJSON(env, EXP_BUDGET_KEY, b);
   return b;
 }
 export async function handleBeli(env, msg, chatId) {
   const L = await uiLang(env);
+  await loadMainCur(env);
+  const main = mainCur();
   const raw = (msg.text || "").replace(/^\/\S+\s*/, "").trim();
   const arr = (await getJSON(env, EXP_KEY, [])).filter(e => e && typeof e.amt === "number");
   const mon = monWIB(nowS());
@@ -405,39 +433,62 @@ export async function handleBeli(env, msg, chatId) {
   const budget = await expBudget(env);
   if (/^(budget|bujet)\b/.test(low)) {
     const toks = raw.replace(/^\S+\s*/, "").trim().split(/\s+/).filter(Boolean);
-    if (!toks.length) { const s = expSummary(arr, mon, budget); return reply(env, chatId, L.bHead + "\n" + budgetCard(L, s)); }
-    const amt = parseMoney(toks[toks.length - 1]);
+    if (!toks.length) { const s = expSummary(arr, mon, budget); return reply(env, chatId, L.bHead + "\n" + budgetCard(L, s) + expOtherLine(L, s)); }
+    const money = parseAmount(toks[toks.length - 1], main);
     const cat = toks.length > 1 ? toks[0].toLowerCase() : "";
-    if (amt === null) return reply(env, chatId, L.bBudgetBad);
-    const nb = await setBudget(env, amt, cat);
-    const s = expSummary(arr, mon, nb);
-    return reply(env, chatId, (cat ? L.bBudgetCat(cat, rp(amt)) : L.bBudgetSet(rp(amt))) + "\n" + budgetCard(L, s));
+    if (!money) return reply(env, chatId, L.bBudgetBad);
+    const nb = await setBudget(env, money.amt, cat, money.cur);
+    const s = expSummary(arr, mon, nb, money.cur);
+    return reply(env, chatId, (cat ? L.bBudgetCat(cat, rp(money.amt, money.cur)) : L.bBudgetSet(rp(money.amt, money.cur))) + "\n" + budgetCard(L, s));
   }
   if (!raw || low === "recap") {
     const s = expSummary(arr, mon, budget);
     if (low === "recap") {
-      const top = s.rows.slice().sort((a, b) => b.amt - a.amt).slice(0, 5).map(e => "\u2022 " + rp(e.amt) + " \u2014 " + esc(e.note || "-") + (e.cat ? " #" + esc(e.cat) : "")).join("\n");
-      return reply(env, chatId, L.bHead + "\n" + L.bMtd(rp(s.total), s.rows.length, bigTxt(s.big)) + (top ? "\n" + top : ""));
+      const top = s.rows.slice().sort((a, b) => b.amt - a.amt).slice(0, 5).map(e => "\u2022 " + rp(e.amt, s.cur) + " \u2014 " + esc(e.note || "-") + (e.cat ? " #" + esc(e.cat) : "")).join("\n");
+      return reply(env, chatId, L.bHead + "\n" + L.bMtd(rp(s.total, s.cur), s.rows.length, bigTxt(s.big, s.cur)) + (top ? "\n" + top : "") + expOtherLine(L, s));
     }
-    return reply(env, chatId, L.bHead + "\n" + budgetCard(L, s) + "\n" + L.bUsage);
+    return reply(env, chatId, L.bHead + "\n" + budgetCard(L, s) + expOtherLine(L, s) + "\n" + L.bUsage);
   }
   const sp = raw.indexOf(" ");
-  const amt = parseAmt(sp < 0 ? raw : raw.slice(0, sp));
-  const parsed = splitCat(sp < 0 ? "" : raw.slice(sp + 1));
+  let head = sp < 0 ? raw : raw.slice(0, sp);
+  let tail = sp < 0 ? "" : raw.slice(sp + 1);
+  let money = parseAmount(head, main);
+  if (money && !head.trim().match(/[A-Za-z$\u20AC\u00A3\u00A5\u20B9\u20B1\u0E3F]/)) {
+    const t1 = (tail.split(/\s+/)[0] || "");
+    const c1 = curToken(t1);
+    if (c1) { const re = parseAmount(head + " " + t1, main); money = { amt: re ? re.amt : money.amt, cur: c1 }; tail = tail.slice(t1.length).trim(); }
+  }
+  const parsed = splitCat(tail);
   const note = parsed.note.slice(0, EXP_NOTE_CAP);
-  if (amt === null) return reply(env, chatId, L.bBad);
-  arr.unshift(parsed.cat ? { ts: Date.now(), amt, note, cat: parsed.cat } : { ts: Date.now(), amt, note });
+  if (!money) return reply(env, chatId, L.bBad);
+  const rec = { ts: Date.now(), amt: money.amt, cur: money.cur, note };
+  if (parsed.cat) rec.cat = parsed.cat;
+  arr.unshift(rec);
   while (arr.length > EXP_MAX) arr.pop();
   await putJSON(env, EXP_KEY, arr);
-  const sum = expSummary(arr, mon, await expBudget(env));
-  return reply(env, chatId, L.bOk(rp(amt), esc(note || "-"), rp(sum.total) + (sum.cap ? " " + expBudgetLine(L, sum) : "")) + (parsed.cat ? "\n" + L.bCatAdded(parsed.cat) : ""));
+  const sum = expSummary(arr, mon, await expBudget(env), money.cur);
+  return reply(env, chatId, L.bOk(rp(rec.amt, rec.cur), esc(note || "-"), rp(sum.total, sum.cur) + (sum.cap ? " " + expBudgetLine(L, sum) : "")) + (parsed.cat ? "\n" + L.bCatAdded(parsed.cat) : "") + expOtherLine(L, sum));
+}
+
+export async function handleCur(env, msg, chatId) {
+  const L = await uiLang(env);
+  await loadMainCur(env);
+  const arg = String(msg.text || "").replace(/^\/\S+\s*/, "").trim().toUpperCase();
+  if (!arg) {
+    return reply(env, chatId, L.curNow(mainCur(), fmtMoney(1234.5, mainCur())) + "\n" + L.curList(CUR_CODES.join(", ")));
+  }
+  if (!isCur(arg)) return reply(env, chatId, L.curBad(CUR_CODES.join(", ")));
+  await env.KV.put(MAIN_CUR_KEY, arg);
+  setMainCur(arg);
+  return reply(env, chatId, L.curSet(arg, fmtMoney(1234.5, arg)));
 }
 
 export async function expenseAdd(env, amtTok, note) {
-  const amt = parseMoney(amtTok);
-  if (amt === null) return { ok: false, why: "bad" };
+  await loadMainCur(env);
+  const money = parseAmount(amtTok, mainCur());
+  if (!money) return { ok: false, why: "bad" };
   const parsed = splitCat(note);
-  const rec = { ts: Date.now(), amt, note: parsed.note.slice(0, EXP_NOTE_CAP) };
+  const rec = { ts: Date.now(), amt: money.amt, cur: money.cur, note: parsed.note.slice(0, EXP_NOTE_CAP) };
   if (parsed.cat) rec.cat = parsed.cat;
   const arr = await mutateJSON(env, EXP_KEY, [], cur => {
     const list = Array.isArray(cur) ? cur.filter(e => e && typeof e.amt === "number") : [];
@@ -445,8 +496,8 @@ export async function expenseAdd(env, amtTok, note) {
     while (next.length > EXP_MAX) next.pop();
     return { val: next, okNow: back => Array.isArray(back) && back.some(e => e && e.ts === rec.ts && e.amt === rec.amt) };
   });
-  const sum = expSummary(arr, monWIB(nowS()), await expBudget(env));
-  return { ok: true, amt, note: rec.note, cat: parsed.cat || EXP_CAT_DEFAULT, total: sum.total, n: sum.rows.length, left: sum.left, cap: sum.cap };
+  const sum = expSummary(arr, monWIB(nowS()), await expBudget(env), rec.cur);
+  return { ok: true, amt: rec.amt, cur: rec.cur, note: rec.note, cat: parsed.cat || EXP_CAT_DEFAULT, total: sum.total, n: sum.rows.length, left: sum.left, cap: sum.cap, others: sum.others };
 }
 
 export { dayWIB, monWIB, rp, wkOf };
@@ -721,10 +772,11 @@ export async function lifeDigest(env, L, nowSec) {
     const prevMon = monWIB(sec - 86400);
     const rows = arr.filter(e => monWIB(Math.floor(e.ts / 1000)) === prevMon);
     if (rows.length) {
-      const { total, big } = mtdOf(rows, prevMon);
+      const cur0 = mainCur();
+      const { total, big } = mtdOf(rows, prevMon, cur0);
       await putJSON(env, EXP_MONTH_KEY, monWIB(sec));
-      tail += "\n" + L.dgExp(prevMon, rp(total), rows.length, bigTxt(big));
-      data += "Spending last month (" + prevMon + "): " + rp(total) + " in " + rows.length + " entries. ";
+      tail += "\n" + L.dgExp(prevMon, rp(total, cur0), rows.length, bigTxt(big, cur0));
+      data += "Spending last month (" + prevMon + "): " + rp(total, cur0) + " in " + rows.length + " entries. ";
     }
   }
   return { data: data.trim(), tail };
