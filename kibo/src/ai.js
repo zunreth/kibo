@@ -151,6 +151,7 @@ import {
   agentQuest,
   agentTodo,
 } from './feat-agent.js';
+import { agentCommands } from './feat-help.js';
 
 export const TOOLS_AGENT = [
   { type: "function", function: { name: "web_search", description: "Search the live web (news, prices, schedules, fresh facts). Use it when your knowledge might be stale.", parameters: { type: "object", properties: { query: { type: "string", description: "search keywords" } }, required: ["query"] } } },
@@ -179,6 +180,7 @@ export const TOOLS_AGENT = [
   { type: "function", function: { name: "shorten", description: "Turn a long URL into a short link on the bot's own domain. Use it whenever the user will want to retype or share a link.", parameters: { type: "object", properties: { url: { type: "string", description: "the http(s) URL" } }, required: ["url"] } } },
   { type: "function", function: { name: "quest", description: "Quest housekeeping. action='status' shows shields/points/streak; 'shield' buys a streak shield with points; 'reroll' swaps today's daily quest (limited per day).", parameters: { type: "object", properties: { action: { type: "string", enum: ["status", "shield", "reroll"], description: "what to do" } }, required: ["action"] } } },
   { type: "function", function: { name: "todo", description: "The user's task list (things to do, as opposed to reminders which fire at a moment). action='list'; 'add' with text (+ optional due like 'besok 09:00' or '2026-12-01', + rec='daily'/'weekly' to repeat); 'done' / 'del' / 'snooze' with id (or part of the text) — snooze also needs due.", parameters: { type: "object", properties: { action: { type: "string", enum: ["list", "add", "done", "del", "snooze"], description: "what to do" }, text: { type: "string", description: "task text (for add) or part of it (to find one)" }, id: { type: "integer", description: "task id when known" }, due: { type: "string", description: "when it is due (add/snooze), e.g. '2h', 'besok 09:00', '2026-12-01'" }, rec: { type: "string", enum: ["daily", "weekly"], description: "repeat this task after it is done (optional)" } }, required: ["action"] } } },
+  { type: "function", function: { name: "commands", description: "kibo's own slash-command catalog (the exact list the bot routes and the /help page shows). Call this whenever the user asks which command does something, how to do X in the bot, what a command is called, or asks for the command list — never answer a slash-command question from memory. q = keywords in any language (Indonesian works). cat = one group. No arguments = the group index.", parameters: { type: "object", properties: { action: { type: "string", enum: ["search", "list"], description: "search (default) or list a whole group" }, q: { type: "string", description: "keywords, e.g. 'expense', 'pengeluaran', 'reminder', 'shorten link'" }, cat: { type: "string", enum: ["daily", "money", "ai", "story", "media", "fun", "system"], description: "one group when the user wants a category" } } } } },
   { type: "function", function: { name: "undo", description: "Undo the most recent write you made to the user's data (a reminder, expense, habit, journal entry, todo, etc.). Use it when the user says the last change was wrong or asks to undo it. Pass id only if you are undoing a specific older entry; omit it to undo the newest.", parameters: { type: "object", properties: { id: { type: "string", description: "audit id to undo (optional; omit = newest)" } } } } }
 ];
 
@@ -381,6 +383,7 @@ export async function execTool(env, name, argsJson, chatId) {
   if (name === "shorten") return agentShorten(env, a);
   if (name === "quest") return agentQuest(env, chatId || parseInt((await env.KV.get("owner_chat")) || "0", 10), a);
   if (name === "todo") return agentTodo(env, a);
+  if (name === "commands") return agentCommands(env, a);
 
   if (name === "open_url" || (!q && url)) {
     if (!url) return "error: url is empty";
@@ -459,6 +462,12 @@ export function toolLabel(name, argsJson, L) {
   if (name === "headlines") return L.tlHeadlines + (a.n || a.count || 5);
   if (name === "shorten") return L.tlShorten + String(a.url || a.link || "?").slice(0, 60);
   if (name === "quest") return L.tlQuest + " · " + String(a.action || "status").toLowerCase();
+  if (name === "commands") {
+    const q2 = a.q || a.query || a.keywords || "";
+    if (q2) return (L.tlCmdFind || "commands: ") + '"' + String(q2).slice(0, 60) + '"';
+    if (a.cat || a.group || a.category) return (L.tlCmdCat || "commands: ") + (a.cat || a.group || a.category);
+    return L.tlCmdAll || "command catalog";
+  }
   let q = a.query || a.q || a.keywords || "";
   if (Array.isArray(q)) q = q.join(" ");
   return L.tlSearch + ' "' + (q || "?") + '"';
