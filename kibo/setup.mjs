@@ -11,6 +11,15 @@ const ROOT = join(HERE, "..");
 const API = "https://api.cloudflare.com/client/v4";
 const SAVED = join(HERE, "setup-saved.json");
 const loadSaved = () => { try { return JSON.parse(readFileSync(SAVED, "utf8")); } catch { return null; } };
+const REPO_RE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
+const repoFromGit = () => {
+  try {
+    const r = spawnSync("git", ["-C", ROOT, "remote", "get-url", "origin"], { encoding: "utf8" });
+    const m = String(r.stdout || "").trim().match(/github\.com[:/]+([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+?)(?:\.git)?\/?$/);
+    return m ? m[1] : "";
+  } catch { return ""; }
+};
+const repoFrom = (cfg) => String((cfg && cfg.repo) || process.env.KIBO_REPO || repoFromGit() || "").trim();
 const warn = (m) => console.log("  ⚠ " + m);
 const ALLOWED_UPDATES = ["message", "edited_message", "callback_query", "message_reaction"];
 const SCHEMA_SQL = "CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, val TEXT NOT NULL, exp INTEGER, updated INTEGER NOT NULL)";
@@ -333,21 +342,28 @@ async function updateFlow(cfgIn, force) {
     } else console.log("  ⚠ origin remote is not the kibo repo (" + remote + ") — using tarball");
   }
   if (!mode && !force) {
-    let remoteVer = "";
-    try {
-      const rv = await fetch("https://raw.githubusercontent.com/ruqes/kibo/main/kibo/src/consts.js");
-      if (rv.ok) remoteVer = ((await rv.text()).match(/BOT_VER\s*=\s*"([^"]*)"/) || ["", ""])[1];
-    } catch {}
-    let localVer = "";
-    try { localVer = (readFileSync(join(ROOT, "kibo", "src", "consts.js"), "utf8").match(/BOT_VER\s*=\s*"([^"]*)"/) || ["", ""])[1]; } catch {}
-    if (remoteVer && localVer && remoteVer === localVer) {
-      mode = "tar";
-      ok(`code already up to date (version ${localVer})`);
+    const repo = repoFrom(loadSaved());
+    if (REPO_RE.test(repo)) {
+      let remoteVer = "";
+      try {
+        const rv = await fetch("https://raw.githubusercontent.com/" + repo + "/main/kibo/src/consts.js");
+        if (rv.ok) remoteVer = ((await rv.text()).match(/BOT_VER\s*=\s*"([^"]*)"/) || ["", ""])[1];
+      } catch {}
+      let localVer = "";
+      try { localVer = (readFileSync(join(ROOT, "kibo", "src", "consts.js"), "utf8").match(/BOT_VER\s*=\s*"([^"]*)"/) || ["", ""])[1]; } catch {}
+      if (remoteVer && localVer && remoteVer === localVer) {
+        mode = "tar";
+        ok(`code already up to date (version ${localVer})`);
+      }
+    } else {
+      ok("no KIBO_REPO saved — skipping the version check (see --update below)");
     }
   }
   if (!mode) {
-    const r = await fetch("https://codeload.github.com/ruqes/kibo/tar.gz/refs/heads/main");
-    if (!r.ok) die(`failed to fetch the repo tarball (HTTP ${r.status})`);
+    const repo = repoFrom(loadSaved());
+    if (!REPO_RE.test(repo)) die("--update needs to know which repo this copy came from. Run it once with KIBO_REPO=owner/name (or pass --repo owner/name), or clone the repo with git and use --force.");
+    const r = await fetch("https://codeload.github.com/" + repo + "/tar.gz/refs/heads/main");
+    if (!r.ok) die(`failed to fetch the repo tarball (HTTP ${r.status}) for ${repo}`);
     const tmp = mkdtempSync(join(tmpdir(), "kibo-up-"));
     const tgz = join(tmp, "kibo.tar.gz");
     writeFileSync(tgz, Buffer.from(await r.arrayBuffer()));
@@ -356,7 +372,7 @@ async function updateFlow(cfgIn, force) {
     cpSync(join(tmp, "kibo-main"), ROOT, { recursive: true });
     rmSync(tmp, { recursive: true, force: true });
     updated = true;
-    ok("code updated: tarball ruqes/kibo@main (setup-saved.json, node_modules, dist untouched)");
+    ok("code updated: tarball " + repo + "@main (setup-saved.json, node_modules, dist untouched)");
   }
   if (mode && !updated && !force) {
     ok("already up to date — nothing to redeploy (use --force to redeploy anyway)");
@@ -487,6 +503,7 @@ async function main() {
   if (process.stdin.isTTY) {
     const want = await yn("Save these credentials to setup-saved.json next to setup.mjs? (next run prefills automatically; local file only, chmod 600, never uploaded)", "n");
     if (want) {
+      if (!cfg.repo) { const r = repoFrom(cfg); if (REPO_RE.test(r)) cfg.repo = r; }
       writeFileSync(SAVED, JSON.stringify(cfg, null, 2));
       chmodSync(SAVED, 0o600);
       ok("credentials saved: setup-saved.json (delete the file to forget)");

@@ -15,9 +15,16 @@ A personal companion bot for Telegram — AI chat with memory, RP/character bond
 ## Quickstart
 
 ```bash
-git clone https://github.com/ruqes/kibo && cd kibo
+git clone <this repo> && cd kibo
 cd kibo && npm install
 node setup.mjs            # interactive; or: node setup.mjs --config my.json
+```
+
+`--update` pulls code from the repo this copy came from. A git clone needs nothing extra (it reads
+`origin`); a copy installed from a tarball must say where it lives:
+
+```bash
+KIBO_REPO=you/your-kibo node setup.mjs --update   # or save it once at install time
 ```
 
 The installer asks for the tokens above, then provisions everything on your own Cloudflare account (KV namespace, D1 database + schema, the Worker, cron, secrets, Telegram webhook, command list) and verifies the result. When it prints ✅ — open your bot in Telegram and send `/start`.

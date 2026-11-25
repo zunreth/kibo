@@ -1117,7 +1117,8 @@ export async function handleNh(env, msg, chatId) {
 }
 
 const NH_SITE = "https://nhentai.to";
-const NH_SITE_UA = "Mozilla/5.0 (compatible; kibo/2.75; +https://github.com/ruqes/kibo)";
+const NH_SITE_UA = "Mozilla/5.0 (compatible; kibo/2.75)";
+const nhBuildRepo = (env) => String((env && env.NHBUILD_REPO) || "").trim();
 const NH_SEARCH_MAX = 12;
 
 export function nhUnesc(s) {
@@ -1366,7 +1367,8 @@ async function nhBuilderGo(env, chatId, L, id, fmt) {
   const wmid = wj && wj.result && wj.result.message_id ? wj.result.message_id : 0;
   try { await putJSON(env, NH_JOB_PREFIX + tok, { id, fmt, chat: chatId, mid: wmid, ts: Date.now() }, env.DB ? { ttlMs: NH_JOB_TTL_MS } : undefined); } catch (_) {}
   try { await putJSON(env, busyKey, { tok, id, fmt, chat: chatId }, env.DB ? { ttlMs: NH_JOB_TTL_MS } : undefined); } catch (_) {}
-  const repo = String(env.NHBUILD_REPO || "ruqes/nhzip");
+  const repo = nhBuildRepo(env);
+  if (!repo) return reply(env, chatId, L.nhCfg);
   const meta = String(env.NH_API || "").replace(/\/+$/, "");
   const cb = String(env.SELF_BASE || "").replace(/\/+$/, "") + "/nhcb";
   const host = await nhHost(env);
@@ -2101,7 +2103,8 @@ export async function handleYtGha(env, cbId, chatId, mid, arg) {
   const jtok = rndTok();
   try { await putJSON(env, YT_JOB_PREFIX + jtok, { chat: chatId, mid: mid || 0, u: e.u, kind, t: String(e.t || "").slice(0, 110), ts: Date.now() }, env.DB ? { ttlMs: NH_JOB_TTL_MS } : undefined); } catch (_) {}
   try { await putJSON(env, busyKey, { tok: jtok, kind }, env.DB ? { ttlMs: NH_JOB_TTL_MS } : undefined); } catch (_) {}
-  const repo = String(env.NHBUILD_REPO || "ruqes/nhzip");
+  const repo = nhBuildRepo(env);
+  if (!repo) return tg(env, "answerCallbackQuery", { callback_query_id: cbId, text: L.nhCfg });
   const cb = String(env.SELF_BASE || "").replace(/\/+$/, "") + "/ytcb";
   let src = "";
   if (kind === "mp3") {
