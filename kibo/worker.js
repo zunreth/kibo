@@ -921,18 +921,29 @@ async function handleCallback(env, cb) {
     await edit(await renderDebugView(env));
   } else if (act === "mmodels" && chatId) {
     await pop(L.popSearching);
+    const forChat = arg === "chat";
     const list = await listBridgeModels(env);
     let view;
     if (!list || !list.length) view = { text: L.mmFail, markup: { inline_keyboard: [navRow(true, "nav:model")] } };
     else {
-      const cur = (await aiConf(env)).model;
-      view = { text: L.mmTitle, markup: { inline_keyboard: list.slice(0, 12).map(m => [{ text: (m.id === cur ? "\u2705 " : "") + String(m.name || m.id).slice(0, 28), callback_data: "mpick:" + m.id }]).concat([navRow(true, "nav:model")]) } };
+      const cf = await aiConf(env);
+      const cur = forChat ? (cf.chat || cf.model) : cf.model;
+      const btn = (m) => forChat
+        ? { text: (m.id === cur ? "\u2705 " : "") + String(m.name || m.id).slice(0, 28), callback_data: "mpickc:" + m.id }
+        : { text: (m.id === cur ? "\u2705 " : "") + String(m.name || m.id).slice(0, 28), callback_data: "mpick:" + m.id };
+      view = { text: forChat ? L.mmTitleChat : L.mmTitleUtil, markup: { inline_keyboard: list.slice(0, 12).map(m => [btn(m)]).concat([navRow(true, "nav:model")]) } };
     }
     await edit(view);
+  } else if (act === "mpickc" && chatId) {
+    const picked = arg;
+    const cf = await aiConf(env);
+    await putJSON(env, AI_CFG_KEY, { base: cf.base, key: cf.key, model: cf.model, chat: picked, label: cf.label || cf.base, ts: Date.now() });
+    await pop(L.popPickedChat(picked));
+    await edit(await renderModelView(env));
   } else if (act === "mpick" && chatId) {
     const picked = arg;
     const cf = await aiConf(env);
-    await putJSON(env, AI_CFG_KEY, { base: cf.base, key: cf.key, model: picked, label: cf.label || cf.base, ts: Date.now() });
+    await putJSON(env, AI_CFG_KEY, { base: cf.base, key: cf.key, model: picked, chat: cf.chat || "", label: cf.label || cf.base, ts: Date.now() });
     await pop(L.popPicked(picked));
     await edit({ text: L.pickedMsg(picked), markup: { inline_keyboard: [navRow(true, "nav:model")] } });
   } else if (act === "mreset" && chatId) {

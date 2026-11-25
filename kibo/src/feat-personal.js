@@ -162,6 +162,7 @@ import {
   LEN_HINT,
   langLine,
   aiConf,
+  aiConfFor,
   listBridgeModels,
   aiFetchRetry,
 } from './ai.js';
@@ -307,7 +308,7 @@ async function* sseText(body, pick) {
 }
 
 export async function* chatStream(env, messages, maxTokens, timeoutMs = 60000) {
-  const cfg = await aiConf(env);
+  const cfg = await aiConfFor(env, "chat");
   if (cfg.base && cfg.key && cfg.model) {
     dbgLog(env, "ai", "model=" + cfg.model + " @" + String(cfg.base).slice(0, 28));
     const r = await aiFetchRetry(cfg.base.replace(/\/+$/, "") + "/chat/completions", {
@@ -1028,13 +1029,20 @@ export async function renderModelView(env) {
   const L = await uiLang(env);
   const cf = await aiConf(env);
   const custom = await getJSON(env, AI_CFG_KEY, null);
+  const chatM = String(cf.chat || "").trim();
+  const utilM = cf.model || "?";
   const kb = [
+    [{ text: L.mdlChatBtn(chatM || utilM), callback_data: "mmodels:chat" }],
+    [{ text: L.mdlUtilBtn(utilM), callback_data: "mmodels:util" }],
     [{ text: L.mdlList, callback_data: "mmodels" }, { text: (custom ? "\u2705 " : "") + L.mdlCustom, callback_data: "mcustom" }]
   ];
   if (custom) kb.push([{ text: L.mdlReset, callback_data: "mreset" }]);
   kb.push([{ text: L.back, callback_data: "nav:cfg" }, { text: L.home, callback_data: "menu" }]);
   return {
-    text: L.mdlTitle + " <code>" + esc(cf.model || "?") + "</code>\n" + L.mdlProvider + ": \u2705 " + esc(custom ? (custom.label || custom.base) : "default (env)") + (custom ? " (custom)" : "") + UI_SEP + L.mdlHint,
+    text: L.mdlTitle + "\n" + L.mdlChat + ": <code>" + esc(chatM || utilM) + "</code>" + (chatM ? "" : L.mdlSame) +
+      "\n" + L.mdlUtil + ": <code>" + esc(utilM) + "</code>\n" +
+      L.mdlProvider + ": \u2705 " + esc(custom ? (custom.label || custom.base) : "default (env)") + (custom ? " (custom)" : "") +
+      UI_SEP + L.mdlTierHint + L.mdlHint,
     markup: { inline_keyboard: kb }
   };
 }

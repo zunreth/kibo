@@ -631,7 +631,7 @@ export async function aiFetchRetry(url, init, env) {
 
 export async function* agentChat(env, msgs, chatId, extSig, turnTs, startMode, noTools) {
   const L = await uiLang(env);
-  const cfg = await aiConf(env);
+  const cfg = await aiConfFor(env, "chat");
   const base = cfg.base.replace(/\/+$/, "");
   dbgLog(env, "ai", "model=" + cfg.model + " @" + base.slice(0, 28) + " tools=" + (noTools ? "off" : "on"));
   let yielded = 0;
@@ -961,6 +961,14 @@ export async function aiConf(env) {
   const c = await getJSON(env, AI_CFG_KEY, null);
   if (c && c.base && c.key && c.model) return c;
   return { base: env.AI_BASE || "", key: env.AI_KEY || "", model: env.AI_MODEL || "", label: "default (env)" };
+}
+
+export async function aiConfFor(env, path) {
+  const c = await aiConf(env);
+  if (String(path || "") !== "chat") return c;
+  const pick = String(c.chat || env.AI_MODEL_CHAT || "").trim();
+  if (!pick || pick === c.model) return c;
+  return Object.assign({}, c, { model: pick });
 }
 
 export async function listBridgeModels(env) {
