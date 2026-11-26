@@ -1,6 +1,7 @@
 import { getJSON, putJSON, tg, reply, notify, esc, mdTg } from './base.js';
 import { uiLang, UI_SEP } from './ui.js';
 import { addPts, rollLoot, lootLine, remindMsg, XP_PER_LEVEL } from './feat-remind.js';
+import { questMutate } from './quest-store.js';
 import { getActiveCard } from './feat-chars.js';
 import { vaultSave, vaultCopyToChannel, vaultMedia } from './feat-vault.js';
 import { WIB, REL_PREFIX, CHAR_KEY, DIVE_STAT_KEY, GAME_SONG_STAT_KEY, GAME_FAN_STAT_KEY, UI_LANG_KEY, EC_INV_KEY, EC_GACHA_KEY, EC_CHARM_KEY, EC_BADGE_KEY, FILE_INDEX_KEY, FILE_MAX, VAULT_CHAT_KEY, SHIELD_MAX, SHOP_ITEMS, CHARM_EMOJI, CHARM_EPIC, CHARM_LEG, GACHA_ODDS, GACHA_COST, GACHA_COST5, GACHA_PITY, GACHA_JACKPOT, GACHA_REFUND, DIVE_GEM_PTS } from './consts.js';
@@ -90,12 +91,14 @@ export async function invUse(env, chatId, mid, item) {
     return editView(env, chatId, mid, await invView(env, L, chatIdArg(chatId)));
   }
   if (it.k === "shield") {
-    const q = await getJSON(env, "quest", {});
-    if ((q.shields || 0) >= SHIELD_MAX) { await notify(env, chatId, L.invShMax(SHIELD_MAX)); return; }
-    q.shields = (q.shields || 0) + 1;
-    await putJSON(env, "quest", q);
+    const out = await questMutate(env, q => {
+      if ((q.shields || 0) >= SHIELD_MAX) return { abort: "max" };
+      q.shields = (q.shields || 0) + 1;
+      return {};
+    });
+    if (!out || out.r.abort) { await notify(env, chatId, L.invShMax(SHIELD_MAX)); return; }
     inv[it.k]--; await putJSON(env, key, inv);
-    await notify(env, chatId, L.invShOk(q.shields, SHIELD_MAX));
+    await notify(env, chatId, L.invShOk(out.q.shields, SHIELD_MAX));
     return editView(env, chatId, mid, await invView(env, L, chatIdArg(chatId)));
   }
   if (it.k === "crate") {

@@ -1,19 +1,19 @@
 import { getJSON, putJSON, tg, reply, esc, notify } from './base.js';
 import { uiLang, UI_SEP } from './ui.js';
 import { addPts, questDay } from './feat-remind.js';
+import { questMutate } from './quest-store.js';
 import { chatStream } from './feat-personal.js';
 import { stripThink, langLine } from './ai.js';
 import { deleteLater } from './feat-media.js';
 import { CHAIN_KEY, CHAIN_STEP_PTS, CHAIN_BONUS, CHAIN_SHIELD, SHIELD_MAX, CHAIN_GEN_STALE_MS, UI_LANG_KEY, SYS_CHAIN, SYS_CHAT, LIVE_CTX } from './consts.js';
 
 async function grantChainShield(env) {
-  try {
-    const q = await getJSON(env, "quest", {});
-    if ((q.shields || 0) >= SHIELD_MAX) return 0;
+  const out = await questMutate(env, q => {
+    if ((q.shields || 0) >= SHIELD_MAX) return { abort: "max" };
     q.shields = (q.shields || 0) + 1;
-    await putJSON(env, "quest", q);
-    return 1;
-  } catch (_) { return 0; }
+    return {};
+  });
+  return out && !out.r.abort ? 1 : 0;
 }
 
 async function chainView(env, chatId, L) {

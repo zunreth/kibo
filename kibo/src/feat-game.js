@@ -3,6 +3,7 @@ import { uiLang, UI_SEP, UI } from "./ui.js";
 import { GAME_WORD_KEY, GAME_QUIZ_KEY, GAME_PVP_KEY, WORD_REWARDS, QUIZ_PTS, QUIZ_HIST_KEY, QUIZ_HIST_MAX, WIB, BET_MIN, BET_MAX, BET_RAKE, PVP_STAKE, GAME_LYRIC_KEY, LYRIC_PTS, LYRIC_POOL_MAX, GAME_SONG_KEY, GAME_FAN_KEY, SONG_PTS, SONG_FAN_PTS, SONG_TRY_MAX, GAME_SONG_STAT_KEY, GAME_FAN_STAT_KEY, SONG_STREAK_CAP, FAN_MIN_SONGS, FAN_MENU_MAX, LFM_USER_KEY, LFM_USER_DEFAULT, UA, DIVE_STATE_KEY, DIVE_PRAC_KEY, GAME_IDLE_REG, GAME_IDLE_MS } from "./consts.js";
 import { askSet, askClear } from "./ask.js";
 import { questDay, addPts, remindMsg } from "./feat-remind.js";
+import { questMutate } from "./quest-store.js";
 import { chatStream } from "./feat-personal.js";
 import { stripThink } from "./ai.js";
 import { gameRecBump } from "./feat-aistats.js";
@@ -518,9 +519,7 @@ export async function pvpSettle(env, chatId, st, winner) {
   if (winner === "U") await addPts(env, st.stake);
   else if (winner === "C") await addPts(env, -st.stake);
   await gameRecBump(env, "pvp", winner, st.stake);
-  const w3 = await getJSON(env, "quest", {});
-  w3.gNote = { ts: Date.now(), text: pvpNoteText(winner, st.t, st.stake) };
-  await putJSON(env, "quest", w3);
+  await questMutate(env, q => { q.gNote = { ts: Date.now(), text: pvpNoteText(winner, st.t, st.stake) }; return {}; });
 }
 
 export async function pvpStop(env, chatId, mid) {
@@ -531,9 +530,7 @@ export async function pvpStop(env, chatId, mid) {
   if (st.p) { const Lp = await uiLang(env); return editView(env, chatId, mid || st.mid, pvpView(st, Lp)); }
   await addPts(env, -st.stake);
   await gameRecBump(env, "pvp", "C", st.stake);
-  const w3 = await getJSON(env, "quest", {});
-  w3.gNote = { ts: Date.now(), text: pvpNoteText("C", st.t, st.stake) + " (The user gave up.)" };
-  await putJSON(env, "quest", w3);
+  await questMutate(env, q => { q.gNote = { ts: Date.now(), text: pvpNoteText("C", st.t, st.stake) + " (The user gave up.)" }; return {}; });
   const L = await uiLang(env);
   return editView(env, chatId, mid || st.mid, pvpView(st, L));
 }
@@ -551,9 +548,8 @@ export async function handleBet(env, msg, chatId) {
   const delta = win ? Math.round(n * (1 - BET_RAKE)) : -n;
   await addPts(env, delta);
   await gameRecBump(env, "bet", win ? "U" : "C", delta);
-  const w = await getJSON(env, "quest", {});
-  w.gNote = { ts: Date.now(), text: betNoteText(win, n, delta) };
-  await putJSON(env, "quest", w);
+  const out = await questMutate(env, q => { q.gNote = { ts: Date.now(), text: betNoteText(win, n, delta) }; return {}; });
+  const w = (out && out.q) || {};
 
   await reply(env, chatId, win ? L.betWin(n, delta, w.points || 0) : L.betLose(n, w.points || 0));
   let ai = "";

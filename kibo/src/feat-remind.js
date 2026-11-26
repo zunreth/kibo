@@ -90,6 +90,7 @@ import {
   nukeSleep,
 } from './base.js';
 import { mutateJSON, mutateWith } from './once.js';
+import { questMutate } from './quest-store.js';
 import {
   STAMP_LAST,
   stampAlive,
@@ -230,8 +231,7 @@ export async function questSys(env) {
   let note = "";
   if (q.gNote && Date.now() - (q.gNote.ts || 0) < NOTE_TTL_MS) {
     note = "\n\nEVENT RESULT (system note, just happened): " + q.gNote.text + " React to it briefly in-character if it fits the moment; this note appears once then disappears.";
-    q.gNote = null;
-    try { await putJSON(env, "quest", q); } catch (_) {}
+    await questMutate(env, cur => { cur.gNote = null; return {}; });
   }
   if (!(q.day === day && !q.done && !q.skipped && pool[q.idx])) return sideQSys(slot, left) + note;
   const e = await getJSON(env, "exp", { xp: 0 });
@@ -264,22 +264,29 @@ import { chainStep } from './feat-chain.js';
 export async function questMark(env, chatId, act) {
   const nowSec = Math.floor(Date.now() / 1000);
   const day = questDay(nowSec);
-  const q = await getJSON(env, "quest", {});
-  const pool = (await uiLang(env)).quests;
-  if (!(q.day === day && !q.done && !q.skipped && pool[q.idx])) return { ok: false, why: "no open daily quest today" };
+  const L = await uiLang(env);
+  const pool = L.quests;
+  let loot = null;
+  const out = await questMutate(env, q => {
+    if (!(q.day === day && !q.done && !q.skipped && pool[q.idx])) return { abort: "none" };
+    if (act === "done") {
+      q.done = true;
+      streakAdvance(q, day, nowSec);
+      q.lastDone = day;
+      q.loot = Object.assign({ d: day }, rollLoot());
+      q.gNote = { ts: Date.now(), text: lootNoteText(q.loot, (q.points || 0) + 10 + q.loot.amt) };
+      loot = q.loot;
+    } else q.skipped = true;
+    return {};
+  });
+  if (!out || out.r.abort) return { ok: false, why: "no open daily quest today" };
+  const q = out.q;
   if (act === "done") {
-    q.done = true;
-    streakAdvance(q, day, nowSec);
-    q.lastDone = day;
-    q.loot = Object.assign({ d: day }, rollLoot());
-    const qTotal = (q.points || 0) + 10 + q.loot.amt;
-    q.gNote = { ts: Date.now(), text: lootNoteText(q.loot, qTotal) };
     const lvUp = await expAdd(env, 10);
-    if (lvUp) await notify(env, chatId, (await uiLang(env)).lvUp(lvUp));
-  } else q.skipped = true;
-  await putJSON(env, "quest", q);
-  if (act === "done") await addPts(env, 10 + q.loot.amt);
-  if (act === "done") { try { await chainStep(env, chatId); } catch (_) {} }
+    if (lvUp) await notify(env, chatId, L.lvUp(lvUp));
+    await addPts(env, 10 + loot.amt);
+    try { await chainStep(env, chatId); } catch (_) {}
+  }
   if (q.mid) {
     if (act === "done") { try { await tg(env, "setMessageReaction", { chat_id: chatId, message_id: q.mid, reaction: [{ type: "emoji", emoji: "\u{1F4AF}" }] }); } catch (_) {} }
     try { await tg(env, "editMessageReplyMarkup", { chat_id: chatId, message_id: q.mid, reply_markup: { inline_keyboard: [] } }); } catch (_) {}
@@ -687,9 +694,7 @@ export async function addPts(env, n) {
     const r = await addPoints(env, "quest", step);
     if (r) return;
   } catch (_) {}
-  const q = await getJSON(env, "quest", {});
-  q.points = Math.max(0, (q.points || 0) + step);
-  await putJSON(env, "quest", q);
+  await questMutate(env, q => { q.points = Math.max(0, (q.points || 0) + step); return {}; });
 }
 
 export function streakAdvance(q, day, nowSec) {
@@ -740,12 +745,14 @@ export async function questReroll(env, chatId, quiet) {
   const rr = await getJSON(env, "quest_rr", { day: "", n: 0 });
   if (rr.day !== day) { rr.day = day; rr.n = 0; }
   if (rr.n >= REROLL_LIMIT) { if (!quiet) await notify(env, chatId, L.rrLimit(REROLL_LIMIT)); return "limit"; }
-  const q = await getJSON(env, "quest", {});
-  const base = (q.day === day && pool[q.idx]) ? q.idx : questOfDay(day, pool);
-  const idx = (base + 1 + Math.floor(Math.random() * (pool.length - 1))) % pool.length;
+  await questMutate(env, q => {
+    const base = (q.day === day && pool[q.idx]) ? q.idx : questOfDay(day, pool);
+    const idx = (base + 1 + Math.floor(Math.random() * (pool.length - 1))) % pool.length;
+    Object.assign(q, { day: day, idx: idx, done: false, skipped: false, delivered: false });
+    return {};
+  });
   rr.n += 1;
   await putJSON(env, "quest_rr", rr);
-  await putJSON(env, "quest", { day: day, idx: idx, done: false, skipped: false, delivered: false, streak: q.streak || 0, points: q.points || 0, lastDone: q.lastDone, mid: q.mid, shields: q.shields || 0, loot: q.loot, gNote: q.gNote });
   if (LIVE_CTX && LIVE_CTX.waitUntil) LIVE_CTX.waitUntil(fireQuest(env, nowSec).catch(() => {}));
   return "ok";
 }
@@ -758,14 +765,16 @@ export async function questReset(env, chatId) {
 }
 
 export async function shieldBuy(env) {
-  const q = await getJSON(env, "quest", {});
-  if ((q.shields || 0) >= SHIELD_MAX) return { ok: false, why: "max", max: SHIELD_MAX, shields: q.shields || 0 };
-  if ((q.points || 0) < SHIELD_PRICE) return { ok: false, why: "poor", price: SHIELD_PRICE, points: q.points || 0 };
-  q.shields = (q.shields || 0) + 1;
-  await putJSON(env, "quest", q);
-  await addPts(env, -SHIELD_PRICE);
-  const w = await getJSON(env, "quest", {});
-  return { ok: true, shields: w.shields || 0, points: w.points || 0, price: SHIELD_PRICE };
+  const out = await questMutate(env, q => {
+    if ((q.shields || 0) >= SHIELD_MAX) return { abort: "max" };
+    if ((q.points || 0) < SHIELD_PRICE) return { abort: "poor" };
+    q.shields = (q.shields || 0) + 1;
+    q.points = Math.max(0, (q.points || 0) - SHIELD_PRICE);
+    return {};
+  });
+  if (!out || out.r.abort === "max") return { ok: false, why: "max", max: SHIELD_MAX, shields: out ? (out.q.shields || 0) : 0 };
+  if (out.r.abort === "poor") return { ok: false, why: "poor", price: SHIELD_PRICE, points: out.q.points || 0 };
+  return { ok: true, shields: out.q.shields || 0, points: out.q.points || 0, price: SHIELD_PRICE };
 }
 export async function handleShield(env, msg, chatId) {
   const L = await uiLang(env);
@@ -809,10 +818,11 @@ export async function fireQuest(env, nowSec) {
     ? { chat_id: owner, text: mdTg(esc(aiPitch)), parse_mode: "HTML", reply_markup: questKb(L) }
     : { chat_id: owner, text: L.qCron(esc(pool[idx])), parse_mode: "HTML", reply_markup: questKb(L) });
   const mid = j && j.ok && j.result ? j.result.message_id : null;
-  const st = fresh
-    ? { day: day, idx: idx, done: false, skipped: false, delivered: true, streak: q.streak || 0, points: q.points || 0, lastDone: q.lastDone, mid: mid, shields: q.shields || 0 }
-    : Object.assign({}, q, { delivered: true, mid: mid || q.mid });
-  await putJSON(env, "quest", st);
+  await questMutate(env, cur => {
+    if (fresh) Object.assign(cur, { day: day, idx: idx, done: false, skipped: false, delivered: true, mid: mid, streak: cur.streak || 0, points: cur.points || 0, shields: cur.shields || 0 });
+    else { cur.delivered = true; cur.mid = mid || cur.mid; }
+    return {};
+  });
 }
 
 export async function questView(env) {
@@ -824,10 +834,14 @@ export async function questView(env) {
   const pool = L.quests;
   const idx = fresh ? questOfDay(day, pool) : q.idx;
   if (!pool[idx]) return { text: L.questNA, markup: { inline_keyboard: [[{ text: L.home, callback_data: "menu" }]] } };
-  const cur = fresh
-    ? Object.assign({}, q, { day: day, idx: idx, done: false, skipped: false, delivered: true, streak: q.streak || 0, points: q.points || 0, lastDone: q.lastDone })
-    : q;
-  if (fresh) await putJSON(env, "quest", cur);
+  let cur = q;
+  if (fresh) {
+    const out = await questMutate(env, c => {
+      Object.assign(c, { day: day, idx: idx, done: false, skipped: false, delivered: true, streak: c.streak || 0, points: c.points || 0 });
+      return {};
+    });
+    cur = out ? out.q : Object.assign({}, q, { day: day, idx: idx, done: false, skipped: false, delivered: true });
+  }
   const rr = await getJSON(env, "quest_rr", { day: "", n: 0 });
   const rrN = (rr.day === day ? rr.n : 0);
   const state = cur.done ? L.profQDone : cur.skipped ? L.profQSkip : L.qStateTodo;
@@ -852,8 +866,11 @@ export async function handleQuest(env, msg, chatId) {
   const v = await questView(env);
   const j = await tg(env, "sendMessage", { chat_id: chatId, text: v.text, parse_mode: "HTML", reply_markup: v.markup });
   if (j && j.ok && j.result) {
-    const q = await getJSON(env, "quest", {});
-    if (q.day === questDay(Math.floor(Date.now() / 1000)) && !q.mid) { q.mid = j.result.message_id; await putJSON(env, "quest", q); }
+    await questMutate(env, q => {
+      if (q.day !== questDay(Math.floor(Date.now() / 1000)) || q.mid) return { abort: "skip" };
+      q.mid = j.result.message_id;
+      return {};
+    });
   }
 }
 
@@ -862,30 +879,37 @@ export async function handleQuestCb(env, chatId, mid, arg) {
   const pool = L.quests;
   const nowSec = Math.floor(Date.now() / 1000);
   const day = questDay(nowSec);
-  const q = await getJSON(env, "quest", {});
-  if (q.day !== day || !pool[q.idx]) {
-    if (mid) await tg(env, "editMessageText", { chat_id: chatId, message_id: mid, text: L.questStale, parse_mode: "HTML", reply_markup: { inline_keyboard: [] } });
-    return;
-  }
   let reacted = false;
   let lvUp = 0;
   let shieldMsg = "";
-  if (arg === "done" && !q.done && !q.skipped) {
-    q.done = true;
-    const sh = streakAdvance(q, day, nowSec);
-    q.lastDone = day;
-    q.loot = Object.assign({ d: day }, rollLoot());
-    q.gNote = { ts: Date.now(), text: lootNoteText(q.loot, (q.points || 0) + 10 + q.loot.amt) };
-    lvUp = await expAdd(env, 10);
-    reacted = true;
-    shieldMsg = sh ? L.shUsed + "\n" : "";
-  } else if (arg === "skip" && !q.done && !q.skipped) {
-    q.skipped = true;
-    reacted = true;
+  let loot = null;
+  const out = await questMutate(env, cur => {
+    if (cur.day !== day || !pool[cur.idx]) return { abort: "stale" };
+    if (arg === "done" && !cur.done && !cur.skipped) {
+      cur.done = true;
+      const sh = streakAdvance(cur, day, nowSec);
+      cur.lastDone = day;
+      cur.loot = Object.assign({ d: day }, rollLoot());
+      cur.gNote = { ts: Date.now(), text: lootNoteText(cur.loot, (cur.points || 0) + 10 + cur.loot.amt) };
+      loot = cur.loot;
+      reacted = true;
+      shieldMsg = sh ? L.shUsed + "\n" : "";
+    } else if (arg === "skip" && !cur.done && !cur.skipped) {
+      cur.skipped = true;
+      reacted = true;
+    }
+    return {};
+  });
+  if (!out || out.r.abort) {
+    if (mid) await tg(env, "editMessageText", { chat_id: chatId, message_id: mid, text: L.questStale, parse_mode: "HTML", reply_markup: { inline_keyboard: [] } });
+    return;
   }
-  if (reacted) await putJSON(env, "quest", q);
-  if (q.done) await addPts(env, 10 + q.loot.amt);
-  if (q.done) { try { await chainStep(env, chatId); } catch (_) {} }
+  const q = out.q;
+  if (reacted && q.done) {
+    lvUp = await expAdd(env, 10);
+    await addPts(env, 10 + loot.amt);
+  }
+  if (reacted && q.done) { try { await chainStep(env, chatId); } catch (_) {} }
 
   if (mid && reacted) {
     if (q.done) { try { await tg(env, "setMessageReaction", { chat_id: chatId, message_id: mid, reaction: [{ type: "emoji", emoji: "\u{1F4AF}" }] }); } catch (_) {} }
