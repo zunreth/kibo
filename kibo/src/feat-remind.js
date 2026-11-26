@@ -89,7 +89,7 @@ import {
   nukeGone,
   nukeSleep,
 } from './base.js';
-import { mutateJSON } from './once.js';
+import { mutateJSON, mutateWith } from './once.js';
 import {
   STAMP_LAST,
   stampAlive,
@@ -650,10 +650,12 @@ export async function delReminder(env, msg, chatId) {
   const L = await uiLang(env);
   const body = (msg.text || "").replace(/^\/\S+\s*/, "").trim();
   const id = body;
-  const obj = await getJSON(env, "reminders", {});
-  if (!obj[id] || obj[id].done) { await reply(env, chatId, L.remGone(esc(id))); return; }
-  obj[id].done = true;
-  await putJSON(env, "reminders", obj);
+  const got = await mutateWith(env, "reminders", {}, cur => {
+    if (!cur[id] || cur[id].done) return { val: cur, okNow: false, gone: true };
+    cur[id].done = true;
+    return { val: cur, okNow: back => !!(back[id] && back[id].done) };
+  });
+  if (got.gone) { await reply(env, chatId, L.remGone(esc(id))); return; }
   await notify(env, chatId, L.remDeleted(esc(id)));
 }
 

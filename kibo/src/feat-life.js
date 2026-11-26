@@ -15,7 +15,7 @@ import {
   EXP_BUDGET_KEY, EXP_CAT_DEFAULT, EXP_CAT_CAP, FOCUS_LOG_KEY, FOCUS_LOG_MAX,
 } from './consts.js';
 import { getJSON, putJSON, reply, notify, esc, mdTg, tg, delCmd } from './base.js';
-import { mutateJSON } from './once.js';
+import { mutateJSON, mutateWith } from './once.js';
 import { uiLang, fmtWIB, UI_SEP } from './ui.js';
 import { addPts, parseRemind, remindMsg } from './feat-remind.js';
 import { getActiveCard } from './feat-chars.js';
@@ -177,7 +177,7 @@ export async function handleSleep(env, msg, chatId) {
   return reply(env, chatId, L.sHead + "\n" + (gn ? L.sOpen(fmtWIB(gn, L)) + "\n" : "") + (rows ? rows + "\n" + L.sAvg(avg, log.length) : L.sEmpty) + "\n" + L.sHow);
 }
 
-async function habitsResetLazy(env, arr, today, yesterday, wkNow) {
+function habitsResetPure(arr, today, yesterday, wkNow) {
   let ch = false;
   const wk = wkNow || wkOf();
   for (const h of arr) {
@@ -185,15 +185,18 @@ async function habitsResetLazy(env, arr, today, yesterday, wkNow) {
       if (h.wk !== wk) { if ((h.wkc || 0) < h.tgt && h.streak > 0) h.streak = 0; h.wk = wk; h.wkc = 0; ch = true; }
     } else if (h.last_done && h.last_done !== today && h.last_done < yesterday && h.streak > 0) { h.streak = 0; ch = true; }
   }
-  if (ch) await putJSON(env, HABITS_KEY, arr);
   return ch;
 }
 export async function habitView(env) {
   const L = await uiLang(env);
   const sec = nowS();
   const today = dayWIB(sec), yesterday = dayWIB(sec - 86400);
-  const arr = (await getJSON(env, HABITS_KEY, [])).filter(h => h && h.name);
-  await habitsResetLazy(env, arr, today, yesterday);
+  const got = await mutateWith(env, HABITS_KEY, [], cur => {
+    const a = cur.filter(h => h && h.name);
+    habitsResetPure(a, today, yesterday, wkOf(sec));
+    return { val: a, okNow: () => true };
+  });
+  const arr = (got && got.val) || [];
   const plan = await getJSON(env, HABIT_PLAN_KEY, null);
   try { if (plan) await planNudgeMaybe(env, plan); } catch (_) {}
   const rows = arr.map((h, i) => (i + 1) + ". " + esc(h.name) + " " + (h.last_done === today ? "\u2705" : "\u2b1c") + (h.tgt ? " " + L.hWkProg(Math.min(h.wkc || 0, h.tgt), h.tgt) : "") + " \u{1F525}" + (h.streak || 0) + (h.tgt ? "w" : "")).join("\n");
@@ -215,35 +218,42 @@ export async function handleHabit(env, msg, chatId) {
     if (/^\d$/.test(rest)) return reply(env, chatId, L.hAddUsage);
     if (!name || raw.toLowerCase().trim() === "add") return reply(env, chatId, L.hAddUsage);
     if (tgt && (tgt < 1 || tgt > 7)) return reply(env, chatId, L.hTgtRange);
-    const arr = (await getJSON(env, HABITS_KEY, [])).filter(h => h && h.name);
-    if (arr.length >= HABIT_MAX) return reply(env, chatId, L.hFull(HABIT_MAX));
-    arr.push(Object.assign({ id: (arr.reduce((m, h) => Math.max(m, h.id || 0), 0) + 1), name, streak: 0, last_done: "" }, tgt ? { tgt, wk: wkOf(nowS()), wkc: 0 } : {}));
-    await putJSON(env, HABITS_KEY, arr);
+    const got = await mutateWith(env, HABITS_KEY, [], cur => {
+      const a = cur.filter(h => h && h.name);
+      if (a.length >= HABIT_MAX) return { val: a, okNow: false, full: true };
+      a.push(Object.assign({ id: (a.reduce((m, h) => Math.max(m, h.id || 0), 0) + 1), name, streak: 0, last_done: "" }, tgt ? { tgt, wk: wkOf(nowS()), wkc: 0 } : {}));
+      return { val: a, okNow: back => back.some(h => h && h.name === name) };
+    });
+    if (!got || got.full) return reply(env, chatId, L.hFull(HABIT_MAX));
     return notify(env, chatId, tgt ? L.hAddOkW(esc(name), tgt) : L.hAddOk(esc(name)));
   }
   if (sub === "del") {
     const toks = raw.slice(3).trim().split(/[\s,]+/).filter(Boolean);
     if (!toks.length) return reply(env, chatId, L.hDelUsage);
-    const arr = (await getJSON(env, HABITS_KEY, [])).filter(h => h && h.name);
-    const want = new Set();
-    let tried = 0, miss = 0;
-    for (const tk of toks) {
-      const m = tk.match(/^(\d{1,2})(?:-(\d{1,2}))?$/);
-      if (!m) continue;
-      tried++;
-      const a = parseInt(m[1], 10), b = m[2] ? parseInt(m[2], 10) : a;
-      let hit = false;
-      for (let i = Math.min(a, b); i <= Math.max(a, b); i++) if (i >= 1 && i <= arr.length) { want.add(i); hit = true; }
-      if (!hit) miss++;
-    }
-    if (!want.size) return reply(env, chatId, tried ? L.hGone : L.hDelUsage);
-    const gone = [], goneIds = [];
-    const keep = arr.filter((h, i) => {
-      if (!want.has(i + 1)) return true;
-      gone.push(esc(h.name)); goneIds.push(h.id);
-      return false;
+    const got = await mutateWith(env, HABITS_KEY, [], cur => {
+      const a = cur.filter(h => h && h.name);
+      const want = new Set();
+      let tried = 0, miss = 0;
+      for (const tk of toks) {
+        const m = tk.match(/^(\d{1,2})(?:-(\d{1,2}))?$/);
+        if (!m) continue;
+        tried++;
+        const x = parseInt(m[1], 10), y = m[2] ? parseInt(m[2], 10) : x;
+        let hit = false;
+        for (let i = Math.min(x, y); i <= Math.max(x, y); i++) if (i >= 1 && i <= a.length) { want.add(i); hit = true; }
+        if (!hit) miss++;
+      }
+      if (!want.size) return { val: a, okNow: false, tried, miss, none: true };
+      const gone = [], goneIds = [];
+      const keep = a.filter((h, i) => {
+        if (!want.has(i + 1)) return true;
+        gone.push(esc(h.name)); goneIds.push(h.id);
+        return false;
+      });
+      return { val: keep, okNow: back => !back.some(h => goneIds.includes(h.id)), gone, goneIds, tried, miss };
     });
-    await putJSON(env, HABITS_KEY, keep);
+    if (!got || got.none) return reply(env, chatId, (got && got.tried) ? L.hGone : L.hDelUsage);
+    const { gone, goneIds, miss } = got;
     const plan = await getJSON(env, HABIT_PLAN_KEY, null);
     if (plan) {
       let ch = false;
@@ -257,33 +267,40 @@ export async function handleHabit(env, msg, chatId) {
 export async function habitCheck(env, idOrName, atSec) {
   const sec = atSec || nowS();
   const today = dayWIB(sec), yesterday = dayWIB(sec - 86400);
-  const arr = (await getJSON(env, HABITS_KEY, [])).filter(h => h && h.name);
-  await habitsResetLazy(env, arr, today, yesterday, wkOf(sec));
   const want = String(idOrName == null ? "" : idOrName).trim().toLowerCase();
-  const h = arr.find(x => String(x.id) === String(idOrName))
-    || (want ? arr.find(x => String(x.name).toLowerCase() === want) : null)
-    || (want ? arr.find(x => String(x.name).toLowerCase().includes(want)) : null);
-  if (!h) return { ok: false, why: "gone" };
-  if (h.last_done === today) return { ok: false, why: "already", name: h.name, streak: h.streak || 0 };
-  let bonus = 0, wkHit = false;
-  if (h.tgt) {
-    const before = h.wkc || 0;
-    h.wkc = Math.min(before + 1, h.tgt);
-    wkHit = before < h.tgt && h.wkc === h.tgt;
-    if (wkHit) { h.streak = (h.streak || 0) + 1; bonus = HABIT_WEEK_PTS; }
-  } else {
-    h.streak = h.last_done === yesterday ? (h.streak || 0) + 1 : 1;
-  }
-  h.last_done = today;
-  await putJSON(env, HABITS_KEY, arr);
-  await addPts(env, HABIT_PTS + bonus);
-  if (wkHit) {
+  const out = await mutateWith(env, HABITS_KEY, [], cur => {
+    const arr = cur.filter(h => h && h.name);
+    habitsResetPure(arr, today, yesterday, wkOf(sec));
+    const h = arr.find(x => String(x.id) === String(idOrName))
+      || (want ? arr.find(x => String(x.name).toLowerCase() === want) : null)
+      || (want ? arr.find(x => String(x.name).toLowerCase().includes(want)) : null);
+    if (!h) return { val: arr, okNow: false, res: { ok: false, why: "gone" } };
+    if (h.last_done === today) return { val: arr, okNow: false, res: { ok: false, why: "already", name: h.name, streak: h.streak || 0 } };
+    let bonus = 0, wkHit = false;
+    if (h.tgt) {
+      const before = h.wkc || 0;
+      h.wkc = Math.min(before + 1, h.tgt);
+      wkHit = before < h.tgt && h.wkc === h.tgt;
+      if (wkHit) { h.streak = (h.streak || 0) + 1; bonus = HABIT_WEEK_PTS; }
+    } else {
+      h.streak = h.last_done === yesterday ? (h.streak || 0) + 1 : 1;
+    }
+    h.last_done = today;
+    const res = { ok: true, name: h.name, streak: h.streak || 0, wkc: h.wkc || 0, tgt: h.tgt || 0, wkHit, pts: HABIT_PTS + bonus };
+    const hid = h.id;
+    return { val: arr, okNow: back => { const x = back.find(y => String(y.id) === String(hid)); return !!x && x.last_done === today; }, res };
+  });
+  const r = (out && out.res) || { ok: false, why: "gone" };
+  if (!r.ok) return r;
+  await addPts(env, r.pts);
+  const h = { name: r.name, streak: r.streak, wkc: r.wkc, tgt: r.tgt };
+  if (r.wkHit) {
     await lifeNote(env, "hit this week's target for the habit '" + h.name + "' (" + h.wkc + "/" + h.tgt + " this week, " + h.streak + "-week streak)");
     if (HABIT_WK_MS.includes(h.streak)) await lifeNote(env, "the habit '" + h.name + "' reached a " + h.streak + "-week streak");
   } else {
     if (HABIT_MS.includes(h.streak)) await lifeNote(env, "the habit '" + h.name + "' reached a " + h.streak + "-day streak");
   }
-  return { ok: true, name: h.name, streak: h.streak || 0, wkc: h.wkc || 0, tgt: h.tgt || 0, wkHit, pts: HABIT_PTS + bonus };
+  return r;
 }
 
 export async function handleHabitCb(env, chatId, mid, arg) {
@@ -674,10 +691,12 @@ export async function handleCountdown(env, msg, chatId) {
   }
   if (/^del\s+\d+$/i.test(raw)) {
     const n = parseInt(raw.split(/\s+/)[1], 10);
-    const i = arr.findIndex(c => c.id === n);
-    if (i < 0) return reply(env, chatId, L.cdGone);
-    arr.splice(i, 1);
-    await putJSON(env, COUNTDOWN_KEY, arr);
+    const got = await mutateWith(env, COUNTDOWN_KEY, [], cur => {
+      const a = cur.filter(c => c && c.name && c.day);
+      if (!a.some(c => c.id === n)) return { val: a, okNow: false, miss: true };
+      return { val: a.filter(c => c.id !== n), okNow: back => !back.some(c => c.id === n) };
+    });
+    if (!got || got.miss) return reply(env, chatId, L.cdGone);
     return notify(env, chatId, L.cdDelOk);
   }
   const m = /^(.*?)(\d{4}-\d{2}-\d{2})\s*$/.exec(raw);
@@ -685,25 +704,31 @@ export async function handleCountdown(env, msg, chatId) {
   const day = m ? m[2] : "";
   if (!name || !cdDayMs(day)) return reply(env, chatId, L.cdBad);
 
-if (arr.length >= COUNTDOWN_MAX) return reply(env, chatId, L.cdFull(COUNTDOWN_MAX));
-  const id = (arr.reduce((a, c) => Math.max(a, c.id || 0), 0) || 0) + 1;
-  arr.push({ id, name: name.slice(0, COUNTDOWN_NAME_CAP), day, created: sec, fired: 0 });
-  await putJSON(env, COUNTDOWN_KEY, arr);
+  const got = await mutateWith(env, COUNTDOWN_KEY, [], cur => {
+    const a = cur.filter(c => c && c.name && c.day);
+    if (a.length >= COUNTDOWN_MAX) return { val: a, okNow: false, full: true };
+    const id = (a.reduce((m, c) => Math.max(m, c.id || 0), 0) || 0) + 1;
+    a.push({ id, name: name.slice(0, COUNTDOWN_NAME_CAP), day, created: sec, fired: 0 });
+    return { val: a, okNow: back => back.some(c => c.id === id) };
+  });
+  if (!got || got.full) return reply(env, chatId, L.cdFull(COUNTDOWN_MAX));
   return reply(env, chatId, L.cdAdded(esc(name.slice(0, COUNTDOWN_NAME_CAP)), day));
 }
 
 export async function countdownCron(env, nowSec) {
   const today = dayWIB(nowSec);
-  const arr = (await getJSON(env, COUNTDOWN_KEY, [])).filter(c => c && c.name && c.day);
-  let changed = false;
-  for (const c of arr) {
-    if (c.fired || c.day !== today) continue;
-    c.fired = nowSec; changed = true;
-    const L = await uiLang(env);
-    const owner = parseInt((await env.KV.get("owner_chat")) || "0", 10);
-    if (owner) await reply(env, owner, L.cdFire(esc(c.name)));
-  }
-  if (changed) await putJSON(env, COUNTDOWN_KEY, arr);
+  const got = await mutateWith(env, COUNTDOWN_KEY, [], cur => {
+    const arr = cur.filter(c => c && c.name && c.day);
+    const fire = [];
+    for (const c of arr) { if (c.fired || c.day !== today) continue; c.fired = nowSec; fire.push(c); }
+    if (!fire.length) return { val: arr, okNow: false };
+    return { val: arr, okNow: back => fire.every(f => (back.find(c => c.id === f.id) || {}).fired === nowSec), fire };
+  });
+  const fire = (got && got.fire) || [];
+  if (!fire.length) return;
+  const L = await uiLang(env);
+  const owner = parseInt((await env.KV.get("owner_chat")) || "0", 10);
+  for (const c of fire) if (owner) await reply(env, owner, L.cdFire(esc(c.name)));
 }
 
 const fnv1a = s => { let h = 2166136261; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); } return h >>> 0; };
@@ -748,9 +773,13 @@ export async function lifeDigest(env, L, nowSec) {
   const sec = nowSec || nowS();
   const today = dayWIB(sec), yesterday = dayWIB(sec - 86400);
   let data = "", tail = "";
-  const habits = (await getJSON(env, HABITS_KEY, [])).filter(h => h && h.name);
+  const got = await mutateWith(env, HABITS_KEY, [], cur => {
+    const a = cur.filter(h => h && h.name);
+    habitsResetPure(a, today, yesterday, wkOf(sec));
+    return { val: a, okNow: () => true };
+  });
+  const habits = (got && got.val) || [];
   if (habits.length) {
-    await habitsResetLazy(env, habits, today, yesterday);
     const pendD = habits.filter(h => !h.tgt && h.last_done !== today);
     const pendW = habits.filter(h => h.tgt && (h.wkc || 0) < h.tgt);
     if (pendD.length || pendW.length) {
@@ -917,36 +946,44 @@ export async function handleHplanCb(env, chatId, mid, arg) {
     return "";
   }
   if (op === "add" || op === "all") {
-    const arr = (await getJSON(env, HABITS_KEY, [])).filter(h => h && h.name);
     const picks = op === "all" ? plan.habits.map((_, i) => i) : [parseInt(parts[1], 10)];
-    let added = 0, firstName = "", full = false;
-    for (const i of picks) {
-      const h = plan.habits[i];
-      if (!h || h.hid) continue;
-      if (arr.length >= HABIT_MAX) { full = true; continue; }
-      if (arr.some(x => String(x.name).toLowerCase() === h.name.toLowerCase())) { h.hid = -1; continue; }
-      const id = (arr.reduce((m, x) => Math.max(m, x.id || 0), 0) + 1);
-      arr.push(Object.assign({ id, name: h.name, streak: 0, last_done: "" }, { tgt: h.target, wk: wkOf(), wkc: 0 }));
-      h.hid = id; added++;
-      if (!firstName) firstName = h.name;
-    }
-    if (added) {
-      await putJSON(env, HABITS_KEY, arr);
+    const got = await mutateWith(env, HABITS_KEY, [], cur => {
+      const arr = cur.filter(h => h && h.name);
+      const assigned = {};
+      let added = 0, firstName = "", full = false;
+      for (const i of picks) {
+        const h = plan.habits[i];
+        if (!h || h.hid) continue;
+        if (arr.length >= HABIT_MAX) { full = true; continue; }
+        if (arr.some(x => String(x.name).toLowerCase() === h.name.toLowerCase())) { assigned[i] = -1; continue; }
+        const id = (arr.reduce((m, x) => Math.max(m, x.id || 0), 0) + 1);
+        arr.push(Object.assign({ id, name: h.name, streak: 0, last_done: "" }, { tgt: h.target, wk: wkOf(), wkc: 0 }));
+        assigned[i] = id; added++;
+        if (!firstName) firstName = h.name;
+      }
+      return { val: arr, okNow: back => Object.keys(assigned).every(k => assigned[k] === -1 || back.some(x => x.id === assigned[k])), assigned, added, firstName, full };
+    });
+    const arr = got.val;
+    for (const k of Object.keys(got.assigned)) plan.habits[k].hid = got.assigned[k];
+    if (got.added) {
       if (!plan.applied) { plan.applied = true; plan.wk = wkOf(); await lifeNote(env, "started an AI-guided habit plan '" + (plan.topic || "custom") + "'"); }
       await putJSON(env, HABIT_PLAN_KEY, plan);
     }
     await editPlanView(env, chatId, mid, plan.applied ? planAppliedView(plan, L, arr) : planConfirmView(plan, L));
-    return full ? L.hFull(HABIT_MAX) : added ? L.hpAdded(esc(firstName)) : "";
+    return got.full ? L.hFull(HABIT_MAX) : got.added ? L.hpAdded(esc(got.firstName)) : "";
   }
   if (op === "rok") {
     const rv = plan.rv;
     if (!rv) return "";
-    const arr = (await getJSON(env, HABITS_KEY, [])).filter(h => h && h.name);
-    for (const c of rv.changes) {
-      const h = arr.find(x => String(x.name).toLowerCase() === c.name.toLowerCase());
-      if (h) h.tgt = c.target;
-    }
-    await putJSON(env, HABITS_KEY, arr);
+    const got = await mutateWith(env, HABITS_KEY, [], cur => {
+      const arr = cur.filter(h => h && h.name);
+      for (const c of rv.changes) {
+        const h = arr.find(x => String(x.name).toLowerCase() === c.name.toLowerCase());
+        if (h) h.tgt = c.target;
+      }
+      return { val: arr, okNow: () => true };
+    });
+    const arr = got.val;
     plan.schedule = rv.schedule || plan.schedule;
     plan.last_review = wkOf(); plan.nudged_wk = ""; plan.reviews = (plan.reviews || 0) + 1; plan.rv = null;
     await putJSON(env, HABIT_PLAN_KEY, plan);

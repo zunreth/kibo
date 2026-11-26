@@ -78,6 +78,12 @@ export async function mutateJSON(env, key, dflt, fn, tries) {
   return run;
 }
 
+export async function mutateWith(env, key, dflt, fn, tries) {
+  let kept = null;
+  await mutateJSON(env, key, dflt, cur => { kept = null; const r = fn(cur); if (r) kept = r; return r; }, tries);
+  return kept;
+}
+
 async function mutateOnce(env, key, dflt, fn, tries) {
   let last = null;
   for (let i = 0; i < tries; i++) {

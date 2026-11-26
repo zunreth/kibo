@@ -6,6 +6,7 @@ import {
 } from './consts.js';
 import { todoList, todoAdd, todoDone, todoDel, todoSnooze, todoLine, sortTodos, parseDue } from './feat-todo.js';
 import { getJSON, putJSON } from './base.js';
+import { mutateWith } from './once.js';
 import { fmtWIB, UI } from './ui.js';
 import { questDay, XP_PER_LEVEL, journalAdd, shieldBuy, questReroll, REROLL_LIMIT } from './feat-remind.js';
 import {
@@ -55,9 +56,25 @@ export async function agentReminders(env, chatId, a) {
     hit = hits[0] || null;
   }
   if (!hit) return "nothing matched, so nothing was cancelled. current list:\n" + all();
-  obj[hit.id].done = true;
-  await putJSON(env, "reminders", obj);
-  return "cancelled reminder #" + hit.id + " (\"" + esc1(hit.r.text) + "\", was " + fmtWIB(hit.r.at) + ") — " + (active.length - 1) + " active left";
+  const got = await mutateWith(env, "reminders", {}, cur => {
+    const act = activeReminders(cur);
+    let h = null;
+    if (rawId) h = act.find(x => String(x.id) === rawId) || null;
+    if (!h && a && a.match) {
+      const q = esc1(a.match).toLowerCase();
+      const hits = act.filter(x => String(x.r.text).toLowerCase().includes(q));
+      if (hits.length > 1) return { val: cur, okNow: false, hits, h: null };
+      h = hits[0] || null;
+    }
+    if (!h) return { val: cur, okNow: false, hits: [], h: null };
+    cur[h.id].done = true;
+    return { val: cur, okNow: back => !!(back[h.id] && back[h.id].done), hits: [], h, left: act.length - 1 };
+  });
+  if (got.hits.length > 1) {
+    return "several reminders match \"" + esc1(a.match) + "\": " + got.hits.map(x => "#" + x.id + " \"" + esc1(x.r.text) + "\"").join(", ") + " — call reminders again with the exact id";
+  }
+  if (!got.h) return "nothing matched, so nothing was cancelled. current list:\n" + all();
+  return "cancelled reminder #" + got.h.id + " (\"" + esc1(got.h.r.text) + "\", was " + fmtWIB(got.h.r.at) + ") — " + got.left + " active left";
 }
 
 function daysLeft(day) {
@@ -156,32 +173,40 @@ export async function agentHabits(env, a) {
     if (!name) return "error: what should the habit be called? pass name";
     const tgt = parseInt((a && (a.target || a.tgt)) || 0, 10) || 0;
     if (tgt && (tgt < 1 || tgt > 7)) return "error: a weekly target must be 1-7 days";
-    const arr = (await getJSON(env, HABITS_KEY, [])).filter(h => h && h.name);
-    if (arr.length >= HABIT_MAX) return "error: the habit list is full (" + HABIT_MAX + ") — delete one first";
-    if (arr.some(h => h.name.toLowerCase() === name.toLowerCase())) return "error: a habit with that name already exists";
-    const h = Object.assign({ id: (arr.reduce((m, x) => Math.max(m, x.id || 0), 0) + 1), name, streak: 0, last_done: "" });
-    if (tgt) Object.assign(h, { tgt, wk: wkOf(nowS()), wkc: 0 });
-    arr.push(h);
-    await putJSON(env, HABITS_KEY, arr);
-    return "habit \"" + name + "\" (#" + h.id + ") added" + (tgt ? " with a weekly target of " + tgt + " days" : " — daily") + " · " + arr.length + " habits total";
+    const got = await mutateWith(env, HABITS_KEY, [], cur => {
+      const arr = cur.filter(h => h && h.name);
+      if (arr.length >= HABIT_MAX) return { val: arr, okNow: false, why: "full" };
+      if (arr.some(h => h.name.toLowerCase() === name.toLowerCase())) return { val: arr, okNow: false, why: "dup" };
+      const h = Object.assign({ id: (arr.reduce((m, x) => Math.max(m, x.id || 0), 0) + 1), name, streak: 0, last_done: "" });
+      if (tgt) Object.assign(h, { tgt, wk: wkOf(nowS()), wkc: 0 });
+      arr.push(h);
+      return { val: arr, okNow: back => back.some(x => x.name === name), id: h.id, n: arr.length };
+    });
+    if (got.why === "full") return "error: the habit list is full (" + HABIT_MAX + ") — delete one first";
+    if (got.why === "dup") return "error: a habit with that name already exists";
+    return "habit \"" + name + "\" (#" + got.id + ") added" + (tgt ? " with a weekly target of " + tgt + " days" : " — daily") + " · " + got.n + " habits total";
   }
   if (action === "del" || action === "delete" || action === "remove") {
     const who = esc1(a && (a.name || a.id || a.text)).toLowerCase();
     if (!who) return "error: which habit? pass name (or its id)";
-    const arr = (await getJSON(env, HABITS_KEY, [])).filter(h => h && h.name);
-    const hits = arr.filter(h => String(h.id) === who || h.name.toLowerCase() === who)
-      .concat(arr.filter(h => h.name.toLowerCase().includes(who) && !(String(h.id) === who || h.name.toLowerCase() === who)));
-    if (!hits.length) return "error: no habit matches \"" + who + "\"";
-    if (hits.length > 1) return "several habits match \"" + who + "\": " + hits.map(h => "#" + h.id + " " + h.name).join(", ") + " — call again with the exact name or id";
-    const gone = hits[0];
-    await putJSON(env, HABITS_KEY, arr.filter(h => h.id !== gone.id));
+    const got = await mutateWith(env, HABITS_KEY, [], cur => {
+      const arr = cur.filter(h => h && h.name);
+      const hits = arr.filter(h => String(h.id) === who || h.name.toLowerCase() === who)
+        .concat(arr.filter(h => h.name.toLowerCase().includes(who) && !(String(h.id) === who || h.name.toLowerCase() === who)));
+      if (!hits.length || hits.length > 1) return { val: arr, okNow: false, hits, n: arr.length };
+      const gone = hits[0];
+      return { val: arr.filter(h => h.id !== gone.id), okNow: back => !back.some(h => h.id === gone.id), hits, n: arr.length };
+    });
+    if (!got.hits.length) return "error: no habit matches \"" + who + "\"";
+    if (got.hits.length > 1) return "several habits match \"" + who + "\": " + got.hits.map(h => "#" + h.id + " " + h.name).join(", ") + " — call again with the exact name or id";
+    const gone = got.hits[0];
     const plan = await getJSON(env, HABIT_PLAN_KEY, null);
     if (plan && Array.isArray(plan.habits)) {
       let ch = false;
       for (const hp of plan.habits) if (hp.hid === gone.id) { hp.hid = -1; ch = true; }
       if (ch) await putJSON(env, HABIT_PLAN_KEY, plan);
     }
-    return "habit \"" + esc1(gone.name) + "\" (#" + gone.id + ") deleted — " + (arr.length - 1) + " left";
+    return "habit \"" + esc1(gone.name) + "\" (#" + gone.id + ") deleted — " + (got.n - 1) + " left";
   }
   if (action === "check" || action === "done" || action === "tick") {
     const who = (a && (a.name || a.id)) || "";
@@ -240,22 +265,29 @@ export async function agentCountdown(env, a) {
   }
   if (action === "del" || action === "delete" || action === "remove") {
     const id = parseInt(String((a && (a.id ?? a.name)) ?? "").replace(/^#/, ""), 10);
-    const i = arr.findIndex(c => c.id === id);
-    if (!(i >= 0)) return "error: no countdown with id " + (Number.isFinite(id) ? id : "?");
-    const gone = arr.splice(i, 1)[0];
-    await putJSON(env, COUNTDOWN_KEY, arr);
-    return "countdown \"" + esc1(gone.name) + "\" (#" + gone.id + ") deleted";
+    const got = await mutateWith(env, COUNTDOWN_KEY, [], cur => {
+      const a = cur.filter(c => c && c.name && c.day);
+      const hit = a.find(c => c.id === id);
+      if (!hit) return { val: a, okNow: false, gone: null };
+      return { val: a.filter(c => c.id !== id), okNow: back => !back.some(c => c.id === id), gone: hit };
+    });
+    if (!got.gone) return "error: no countdown with id " + (Number.isFinite(id) ? id : "?");
+    return "countdown \"" + esc1(got.gone.name) + "\" (#" + got.gone.id + ") deleted";
   }
   const name = esc1(a && (a.name || a.text));
   const day = String((a && (a.date || a.day || a.when)) || "").trim();
   if (!name) return "error: what is the countdown for? pass name";
   if (daysLeft(day) === null) return "error: pass the date as YYYY-MM-DD (got \"" + day + "\")";
-  if (arr.length >= COUNTDOWN_MAX) return "error: countdown list is full (" + COUNTDOWN_MAX + ") — delete one first";
-  const id = (arr.reduce((m, c) => Math.max(m, c.id || 0), 0) || 0) + 1;
-  arr.push({ id, name: name.slice(0, COUNTDOWN_NAME_CAP), day, created: nowS(), fired: 0 });
-  await putJSON(env, COUNTDOWN_KEY, arr);
+  const got = await mutateWith(env, COUNTDOWN_KEY, [], cur => {
+    const a = cur.filter(c => c && c.name && c.day);
+    if (a.length >= COUNTDOWN_MAX) return { val: a, okNow: false, full: true };
+    const id = (a.reduce((m, c) => Math.max(m, c.id || 0), 0) || 0) + 1;
+    a.push({ id, name: name.slice(0, COUNTDOWN_NAME_CAP), day, created: nowS(), fired: 0 });
+    return { val: a, okNow: back => back.some(c => c.id === id), id };
+  });
+  if (got.full) return "error: countdown list is full (" + COUNTDOWN_MAX + ") — delete one first";
   const d = daysLeft(day);
-  return "countdown \"" + esc1(name.slice(0, COUNTDOWN_NAME_CAP)) + "\" (#" + id + ") set for " + day + (d === 0 ? " — that is today" : " — in " + d + " days");
+  return "countdown \"" + esc1(name.slice(0, COUNTDOWN_NAME_CAP)) + "\" (#" + got.id + ") set for " + day + (d === 0 ? " — that is today" : " — in " + d + " days");
 }
 
 export async function agentSleep(env, a) {

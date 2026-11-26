@@ -118,7 +118,7 @@ import {
   bumpCmd,
 } from './src/kv.js';
 import { wrapStore, d1Sweep, shadowSync } from './src/store-d1.js';
-import { seenUpdate, forgetUpdate, cronLock, cronUnlock } from './src/once.js';
+import { seenUpdate, forgetUpdate, cronLock, cronUnlock, mutateWith } from './src/once.js';
 import { handleNotify } from './src/feat-notify.js';
 import { handleDebug, handleDbgFlag, dbgLog, renderDebugView, renderLogView, setDebug, clearDbgRing, armStream } from './src/feat-debug.js';
 import { handleChain, chainStartCb, chainQuitCb, chainQuit2Cb, chainViewCb } from './src/feat-chain.js';
@@ -629,13 +629,13 @@ async function handleCallback(env, cb) {
   const navRow = (back, cbBack) => [{ text: back ? L.back : L.home, callback_data: cbBack || "menu" }, { text: L.home, callback_data: "menu" }];
 
   if (act === "rdel" && chatId) {
-    const obj = await getJSON(env, "reminders", {});
-    if (obj[arg] && !obj[arg].done) {
-      obj[arg].done = true;
-      await putJSON(env, "reminders", obj);
-    }
+    const got = await mutateWith(env, "reminders", {}, cur => {
+      if (!cur[arg] || cur[arg].done) return { val: cur, okNow: false };
+      cur[arg].done = true;
+      return { val: cur, okNow: back => !!(back[arg] && back[arg].done) };
+    });
     await pop(L.popRemDel(arg));
-    await edit(renderReminders(obj, L));
+    await edit(renderReminders(got.val, L));
   } else if (act === "undo" && chatId) {
     const r = await undoAudit(env, arg);
     if (r.ok) {
