@@ -113,6 +113,17 @@ export async function onUpdErr(env, e) {
 
 export const ERRDM_TTL_S = 3600;
 
+export async function softWrite(env, tag, fn) {
+  try {
+    return await fn();
+  } catch (e) {
+    const wrapped = new Error(tag + ": " + String((e && e.message) || e).slice(0, 120));
+    wrapped.stack = "at softWrite(" + tag + ")\n" + String((e && e.stack) || "");
+    try { await errDm(env, wrapped); } catch (_) {  }
+    return null;
+  }
+}
+
 export async function errDm(env, e) {
   try {
     if (e && e.__tg) return;

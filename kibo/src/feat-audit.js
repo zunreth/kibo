@@ -1,4 +1,5 @@
 import { getJSON, putJSON, tg, reply } from './base.js';
+import { softWrite } from './kv.js';
 import { uiLang } from './ui.js';
 import {
   MEM_KEY, CMEM_PREFIX, CHAR_ACTIVE_KEY, EXP_KEY, HABITS_KEY, HABIT_PLAN_KEY, COUNTDOWN_KEY,
@@ -113,7 +114,7 @@ export async function auditAfter(env, snap, label) {
     }
     if (!changed) return null;
     const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-    try { await putJSON(env, AUDIT_SNAP_PREFIX + id, snap.snaps, { ttlMs: AUDIT_TTL_MS }); } catch (_) {}
+    await softWrite(env, "auditSnap", () => putJSON(env, AUDIT_SNAP_PREFIX + id, snap.snaps, { ttlMs: AUDIT_TTL_MS }));
     const list = (await getJSON(env, AUDIT_KEY, [])) || [];
     const arr = Array.isArray(list) ? list : [];
     arr.unshift({

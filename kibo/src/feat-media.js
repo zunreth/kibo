@@ -1,5 +1,6 @@
 import { tg, reply, getJSON, putJSON, scheduleDelete, tgErrLog, tgUpTmo, NH_FMT_ALIAS, nhDefFmt, nhHost, nhPdfQ } from "./base.js";
 import { uiLang, SEP_LINE } from "./ui.js";
+import { softWrite } from "./kv.js";
 import { UA, UA_BOT, DL_CACHE_PREFIX, DL_CACHE_TTL_MS, DL_MAX_LINKS, DL_SEND_MAX, DL_URL_SEND_MAX, DL_SEND_PHOTO_MAX, FGSI_IG_URL, FGSI_KEY, KYIO_BASE, DL_DEL_MS, DELQ_KEY, DL_MENU_TTL_MS, DL_PICK_PREFIX, DL_SAV_PREFIX, DL_SAV_TTL_MS, DL_BIG_PREFIX, YT_PICK_PREFIX, YT_BUILD_PREFIX, YT_JOB_PREFIX, YT_BUSY_PREFIX, YT_RESOLVE_PREFIX, YT_RESOLVE_DEAD_MS, YT_CACHE_PREFIX, YT_CACHE_TTL_MS, YT_CACHE_TTL_TMP_MS, YT_UP_PREFIX, YT_AIO_PREFIX, SC_CID_KEY, SC_CID_TTL_MS, SC_SEG_MAX, PURUBOY_BASE, BTCH_BASE, NEXRAY_BASE, SPARKY_BASE, YT_UPLOAD_MAX, YTS_MAX, NH_SAVE_PREFIX, NH_SAVES_KEY, NH_AUTODEL_MS, NH_JOB_PREFIX, NH_JOB_TTL_MS, NH_BUSY_PREFIX, NH_KEEP_PREFIX, NH_CACHE_PREFIX, NH_CACHE_TTL_MS, NH_CACHE_TTL_TMP_MS, NH_RECENT_KEY, NH_RECENT_MAX, NH_STAT_PREFIX, NH_STAT_TTL_MS, NH_DEAD_MS, VAULT_CHAT_KEY, FILE_INDEX_KEY } from "./consts.js";
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -1435,20 +1436,19 @@ export async function handleNhCb(request, env) {
 }
 
 async function nhIndexPush(env, o) {
-  let ok = false;
-  try {
+  const ok = await softWrite(env, "fileIndex", async () => {
     const list = await getJSON(env, FILE_INDEX_KEY, []);
     const id = list.reduce((a, x) => Math.max(a, x.id || 0), 0) + 1;
     list.unshift({ id, name: String(o.title || "NH #" + o.id).slice(0, 110), fid: o.fid || "", kind: o.kind || "document", mime: o.mime || "", size: o.size || 0, ts: Date.now(), nh: o.id, pages: o.n || 0 });
     await putJSON(env, FILE_INDEX_KEY, list);
-    ok = true;
-  } catch (_) {}
-  try {
+    return true;
+  });
+  await softWrite(env, "nhSaves", async () => {
     const cur = JSON.parse(await env.KV.get(NH_SAVES_KEY) || "[]");
     if (!cur.find((x) => String(x.id) === String(o.id))) cur.push({ id: o.id, t: String(o.title || "").slice(0, 120), n: o.n || 0, at: Date.now() });
     await env.KV.put(NH_SAVES_KEY, JSON.stringify(cur.slice(-100)));
-  } catch (_) {}
-  return ok;
+  });
+  return !!ok;
 }
 
 async function nhSaveFile(env, cbId, chatId, L, e, vaultId) {

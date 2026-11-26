@@ -15,6 +15,7 @@ import {
   EXP_BUDGET_KEY, EXP_CAT_DEFAULT, EXP_CAT_CAP, FOCUS_LOG_KEY, FOCUS_LOG_MAX,
 } from './consts.js';
 import { getJSON, putJSON, reply, notify, esc, mdTg, tg, delCmd } from './base.js';
+import { softWrite } from './kv.js';
 import { mutateJSON, mutateWith } from './once.js';
 import { uiLang, fmtWIB, UI_SEP } from './ui.js';
 import { addPts, parseRemind, remindMsg } from './feat-remind.js';
@@ -36,12 +37,12 @@ async function lifeMsg(env, event, hint) {
 const reactTail = (env, chatId, ai) => ai ? reply(env, chatId, "\u{1F4AC} " + mdTg(esc(ai))) : Promise.resolve();
 
 export async function lifeNote(env, text) {
-  try {
+  await softWrite(env, "lifeNote", async () => {
     const arr = (await getJSON(env, LIFE_NOTE_KEY, [])).filter(n => n && n.t);
     arr.push({ t: String(text).slice(0, 200), ts: nowS() });
     while (arr.length > LIFE_NOTE_MAX) arr.shift();
     await putJSON(env, LIFE_NOTE_KEY, arr);
-  } catch (_) {}
+  });
 }
 
 function parseDur(raw) {
@@ -73,12 +74,12 @@ export async function focusEnd(env, how) {
   await putJSON(env, FOCUS_KEY, Object.assign({}, st, { settled: true }));
   const min = Math.round(st.dur / 60);
   if (how === "done" && sec >= end && sec <= end + FOCUS_GRACE) {
-    try {
+    await softWrite(env, "focusLog", async () => {
       const log = (await getJSON(env, FOCUS_LOG_KEY, [])).filter(x => x && x.ts);
       log.unshift({ ts: sec, min });
       while (log.length > FOCUS_LOG_MAX) log.pop();
       await putJSON(env, FOCUS_LOG_KEY, log);
-    } catch (_) {}
+    });
     await addPts(env, FOCUS_PTS);
     const wallet = ((await getJSON(env, "quest", {})).points) || 0;
     return { ok: true, outcome: "claim", min, pts: FOCUS_PTS, wallet };

@@ -1,4 +1,5 @@
 import { getJSON, putJSON } from "./base.js";
+import { softWrite } from "./kv.js";
 
 
 export const CRON_LEDGER_KEY = "cron_beat";
@@ -43,6 +44,6 @@ async function beatOnce(env, job, ok, err) {
   if (!changed && now - (prev.w || 0) < CRON_BEAT_WRITE_MS) return next;
   next.w = now;
   led[job] = next;
-  try { await putJSON(env, CRON_LEDGER_KEY, led); } catch (_) {}
+  await softWrite(env, "cronLedger", () => putJSON(env, CRON_LEDGER_KEY, led));
   return next;
 }

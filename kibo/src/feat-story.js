@@ -1,6 +1,7 @@
 import { RP_SAVES_PREFIX, RP_SAVES_MAX, RP_CKPT_PREFIX, RP_CKPT_MAX, RP_CKPT_EVERY, CHAPTERS_PREFIX, CHAPTERS_MAX, CHAPTER_GAP_MS, SCENE_KEY, JEAL_COOLDOWN_MS, JEAL_AFF_MIN, SYS_CHAPTER, CHAR_KEY, CHAT_HIST_KEY, CMEM_PREFIX, REL_PREFIX, PLOT_DIR_KEY, LAST_AI_KEY, HIST_SUM_KEY } from './consts.js';
 import { getJSON, putJSON, esc, reply, notify, tg } from './base.js';
 import { uiLang, fmtWIB, UI_SEP } from './ui.js';
+import { softWrite } from './kv.js';
 import { getActiveCard } from './feat-chars.js';
 import { stripThink } from './ai.js';
 import { chatStream } from './feat-personal.js';
@@ -128,7 +129,7 @@ export async function chapterMaybe(env, card, hist) {
     const title = stripThink(out).trim().split("\n")[0].replace(/^["'#\d.\-\s]+/, "").replace(/["'#\s]+$/, "").slice(0, 80);
     if (!title) return;
     chaps.unshift({ ts: now, end_ts: la.ts, title });
-    await putJSON(env, key, chaps.slice(0, CHAPTERS_MAX));
+    await softWrite(env, "chapterSave", () => putJSON(env, key, chaps.slice(0, CHAPTERS_MAX)));
   } catch (_) {  }
 }
 
